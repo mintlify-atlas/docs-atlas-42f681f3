@@ -1,0 +1,74 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "ADK Utils",
+  "projectDescription": "TypeScript utilities for Google Agent Development Kit (ADK) enabling local Ollama models and streaming support",
+  "theme": "palm",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/ollama-integration",
+              "concepts/streaming",
+              "concepts/testing"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/local-ollama",
+              "guides/cloud-ollama",
+              "guides/nextjs-integration",
+              "guides/playwright-testing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Classes",
+            "pages": [
+              "api/ollama-model",
+              "api/genai-agent-service",
+              "api/mock-model"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "OllamaModel for local and cloud Ollama integration with Google ADK",
+    "GenAIAgentService with native streaming and Server-Sent Events support",
+    "MockModel for testing without API costs",
+    "Function calling support for LLM tool usage",
+    "Seamless Vercel AI SDK and Google GenAI compatibility"
+  ],
+  "publicApiSurface": [
+    "OllamaModel",
+    "GenAIAgentService",
+    "MockModel"
+  ]
+}
