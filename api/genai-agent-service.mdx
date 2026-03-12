@@ -1,0 +1,374 @@
+---
+title: "GenAIAgentService"
+description: "API reference for the GenAIAgentService class"
+---
+
+## Overview
+
+`GenAIAgentService` is a service class that handles GenAI agent interactions with streaming support via Server-Sent Events (SSE). It's designed for use in Next.js API routes and provides a clean, modular structure for agent-based APIs.
+
+## Class Definition
+
+```typescript
+export class GenAIAgentService {
+  constructor(agent: LlmAgent)
+  validateMessages(messages: UIMessage[] | undefined): messages is UIMessage[]
+  transformMessagesToContents(messages: UIMessage[]): Content[]
+  formatToolsForGenAI(): FormattedTool[]
+  createStreamingResponse(messages: UIMessage[]): Response
+  static createErrorResponse(message: string, status: number, details?: string): Response
+}
+```
+
+## Constructor
+
+Creates a new instance of GenAIAgentService.
+
+<ParamField path="agent" type="LlmAgent" required>
+  An ADK `LlmAgent` instance configured with a model (like `OllamaModel`) and optional tools
+</ParamField>
+
+### Usage Example
+
+```typescript
+import { GenAIAgentService, OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+const agent = new LlmAgent({
+  name: 'my-agent',
+  model: new OllamaModel('qwen3:0.6b'),
+  description: 'A helpful assistant',
+  instruction: 'You are a helpful assistant',
+});
+
+const service = new GenAIAgentService(agent);
+```
+
+## Properties
+
+<ResponseField name="agent" type="LlmAgent" private>
+  The LlmAgent instance
+</ResponseField>
+
+<ResponseField name="model" type="BaseLlm" private>
+  The agent's canonical model
+</ResponseField>
+
+<ResponseField name="tools" type="ToolUnion[]" private>
+  Array of tools available to the agent
+</ResponseField>
+
+<ResponseField name="encoder" type="TextEncoder" private>
+  Text encoder for SSE formatting
+</ResponseField>
+
+<ResponseField name="MAX_TURNS" type="number" default="5" private>
+  Maximum number of conversation turns to prevent infinite loops
+</ResponseField>
+
+## Methods
+
+### validateMessages
+
+Validates that the incoming messages array is valid.
+
+```typescript
+validateMessages(messages: UIMessage[] | undefined): messages is UIMessage[]
+```
+
+<ParamField path="messages" type="UIMessage[] | undefined" required>
+  The messages array from the Vercel AI SDK
+</ParamField>
+
+**Returns**: `boolean` - Type guard that narrows the type if validation passes
+
+```typescript
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const service = new GenAIAgentService(agent);
+  
+  if (!service.validateMessages(messages)) {
+    return GenAIAgentService.createErrorResponse('Invalid messages', 400);
+  }
+  
+  // messages is now typed as UIMessage[]
+}
+```
+
+### transformMessagesToContents
+
+Transforms Vercel AI SDK's `UIMessage` format to ADK's `Content` format.
+
+```typescript
+transformMessagesToContents(messages: UIMessage[]): Content[]
+```
+
+<ParamField path="messages" type="UIMessage[]" required>
+  Array of messages from the Vercel AI SDK
+</ParamField>
+
+**Returns**: `Content[]` - Array of ADK-compatible content objects
+
+```typescript
+const uiMessages = [
+  { role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+  { role: 'assistant', parts: [{ type: 'text', text: 'Hi there!' }] },
+];
+
+const contents = service.transformMessagesToContents(uiMessages);
+// Result: [{ role: 'user', parts: [{ text: 'Hello' }] }, ...]
+```
+
+### formatToolsForGenAI
+
+Formats the agent's tools to be compatible with Google GenAI's expected format.
+
+```typescript
+formatToolsForGenAI(): FormattedTool[]
+```
+
+**Returns**: `FormattedTool[]` - Array of tools with `functionDeclarations`
+
+```typescript
+const formattedTools = service.formatToolsForGenAI();
+// Each tool is formatted with functionDeclarations array
+```
+
+### createStreamingResponse
+
+Creates a streaming Response with Server-Sent Events for the agent.
+
+```typescript
+createStreamingResponse(messages: UIMessage[]): Response
+```
+
+<ParamField path="messages" type="UIMessage[]" required>
+  The validated messages array from the frontend
+</ParamField>
+
+**Returns**: `Response` - A streaming response with SSE format
+
+#### SSE Event Types
+
+The streaming response emits these event types:
+
+<Accordion title="start">
+  Emitted when the stream begins
+  ```json
+  { "type": "start" }
+  ```
+</Accordion>
+
+<Accordion title="start-step">
+  Emitted at the start of each conversation turn
+  ```json
+  { "type": "start-step" }
+  ```
+</Accordion>
+
+<Accordion title="text-start">
+  Emitted before text streaming begins
+  ```json
+  { "type": "text-start", "id": "text-1" }
+  ```
+</Accordion>
+
+<Accordion title="text-delta">
+  Emitted for each text chunk during streaming
+  ```json
+  { "type": "text-delta", "id": "text-1", "delta": "text chunk" }
+  ```
+</Accordion>
+
+<Accordion title="text-end">
+  Emitted when text streaming completes
+  ```json
+  { "type": "text-end", "id": "text-1" }
+  ```
+</Accordion>
+
+<Accordion title="finish-step">
+  Emitted at the end of a conversation turn
+  ```json
+  { "type": "finish-step" }
+  ```
+</Accordion>
+
+<Accordion title="finish">
+  Emitted when the entire stream completes
+  ```json
+  { "type": "finish", "finishReason": "stop" }
+  ```
+</Accordion>
+
+### createErrorResponse (static)
+
+Creates a formatted error response.
+
+```typescript
+static createErrorResponse(
+  message: string,
+  status: number,
+  details?: string
+): Response
+```
+
+<ParamField path="message" type="string" required>
+  The error message
+</ParamField>
+
+<ParamField path="status" type="number" required>
+  HTTP status code (e.g., 400, 401, 500)
+</ParamField>
+
+<ParamField path="details" type="string">
+  Optional additional error details
+</ParamField>
+
+**Returns**: `Response` - A JSON error response
+
+```typescript
+if (!messages || messages.length === 0) {
+  return GenAIAgentService.createErrorResponse(
+    'No messages provided',
+    400,
+    'The messages array must contain at least one message'
+  );
+}
+```
+
+## Complete Next.js API Route Example
+
+```typescript route.ts
+import { GenAIAgentService, OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent, tool } from '@google/adk';
+import { z } from 'zod';
+
+// Define tools
+const weatherTool = tool(
+  z.object({
+    location: z.string(),
+  }),
+  async ({ location }) => {
+    return { temperature: 72, location };
+  },
+  {
+    name: 'get_weather',
+    description: 'Get current weather',
+  }
+);
+
+export async function POST(req: Request) {
+  try {
+    // Parse request
+    const { messages } = await req.json();
+    
+    // Create agent
+    const agent = new LlmAgent({
+      name: 'weather-agent',
+      model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1'),
+      description: 'Weather assistant',
+      instruction: 'You help users check the weather',
+      tools: [weatherTool],
+    });
+    
+    // Create service
+    const service = new GenAIAgentService(agent);
+    
+    // Validate messages
+    if (!service.validateMessages(messages)) {
+      return GenAIAgentService.createErrorResponse('Invalid messages', 400);
+    }
+    
+    // Return streaming response
+    return service.createStreamingResponse(messages);
+  } catch (error) {
+    console.error('API Error:', error);
+    return GenAIAgentService.createErrorResponse(
+      'Internal server error',
+      500,
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+  }
+}
+```
+
+## Frontend Integration
+
+Use with Vercel AI SDK's `useChat` hook:
+
+```typescript page.tsx
+'use client';
+
+import { useChat } from 'ai/react';
+
+export default function ChatPage() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    api: '/api/agent',
+  });
+  
+  return (
+    <div>
+      {messages.map(m => (
+        <div key={m.id}>
+          <strong>{m.role}:</strong> {m.content}
+        </div>
+      ))}
+      
+      <form onSubmit={handleSubmit}>
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Ask me anything..."
+        />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+## Multi-Turn Conversations
+
+GenAIAgentService automatically handles multi-turn conversations with tool calling:
+
+1. User sends a message
+2. Agent responds (possibly with function calls)
+3. If function calls exist:
+   - Service executes the functions
+   - Adds results to conversation history
+   - Sends back to the agent
+4. Process repeats until no function calls or MAX_TURNS reached
+5. Final response is streamed to the client
+
+<Note>
+The service limits conversation turns to prevent infinite loops. Default is 5 turns.
+</Note>
+
+## Error Handling
+
+The service handles errors gracefully:
+
+```typescript
+// Errors are sent as text deltas so they appear in the chat UI
+{ "type": "text-delta", "id": "text-1", "delta": "❌ System Error: error message" }
+```
+
+This ensures users see error messages in the chat interface rather than getting a broken stream.
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Streaming Concepts" icon="water" href="/concepts/streaming">
+    Learn how streaming works
+  </Card>
+  <Card title="Next.js Integration" icon="js" href="/guides/nextjs-integration">
+    Complete Next.js setup guide
+  </Card>
+  <Card title="OllamaModel" icon="server" href="/api/ollama-model">
+    Model integration reference
+  </Card>
+  <Card title="MockModel" icon="flask" href="/api/mock-model">
+    Testing utilities reference
+  </Card>
+</CardGroup>

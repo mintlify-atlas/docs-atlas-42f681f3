@@ -1,97 +1,136 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "ADK Utils"
+description: "TypeScript utilities for Google Agent Development Kit (ADK) enabling local Ollama models and streaming support"
 ---
 
-## Setting up
+<div style={{
+  background: 'linear-gradient(135deg, #94cb04 0%, #545454 100%)',
+  padding: '3rem 2rem',
+  borderRadius: '8px',
+  marginBottom: '2rem',
+  color: 'white'
+}}>
+  <h1 style={{ 
+    fontSize: '48px', 
+    fontWeight: 700, 
+    marginBottom: '1rem',
+    fontFamily: 'Inter',
+    color: 'white'
+  }}>
+    ADK Utils
+  </h1>
+  <p style={{ 
+    fontSize: '18px', 
+    fontWeight: 400,
+    fontFamily: 'Inter',
+    color: 'white',
+    maxWidth: '800px'
+  }}>
+    TypeScript utilities for Google Agent Development Kit (ADK) enabling local Ollama models and streaming support
+  </p>
+</div>
 
-Get your documentation site up and running in minutes.
+## Key Features
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Local & Cloud Ollama" icon="server" href="/concepts/ollama-integration">
+    Use local Ollama models during development or cloud-hosted models in production
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Streaming Support" icon="water" href="/concepts/streaming">
+    Native streaming and Server-Sent Events (SSE) for real-time agent responses
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Testing Utilities" icon="flask" href="/concepts/testing">
+    MockModel for testing without API costs or external dependencies
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Function Calling" icon="code" href="/api/ollama-model">
+    Full support for LLM tool calling with Google ADK
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Start
 
-Everything you need to create world-class documentation.
+Get up and running with ADK Utils in minutes.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Install the package">
+    Install ADK Utils and its peer dependencies
+    
+    <CodeGroup>
+    ```bash npm
+    npm install @yagolopez/adk-utils @google/adk @google/genai ai ollama
+    ```
+    ```bash yarn
+    yarn add @yagolopez/adk-utils @google/adk @google/genai ai ollama
+    ```
+    ```bash pnpm
+    pnpm add @yagolopez/adk-utils @google/adk @google/genai ai ollama
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Create your first agent">
+    Create an ADK agent using a local Ollama model
+    
+    ```typescript
+    import { OllamaModel } from '@yagolopez/adk-utils';
+    import { LlmAgent } from '@google/adk';
 
-## Need inspiration?
+    const agent = new LlmAgent({
+      name: 'my-agent',
+      model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1'),
+      description: 'A helpful assistant',
+      instruction: 'You are a helpful assistant...',
+    });
+    ```
+  </Step>
+  
+  <Step title="Start building">
+    Explore the guides to learn more about integrating ADK Utils into your applications
+  </Step>
+</Steps>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Step-by-step installation guide
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first agent in under 5 minutes
+  </Card>
+  <Card title="Next.js Integration" icon="js" href="/guides/nextjs-integration">
+    Create streaming API routes with GenAIAgentService
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/ollama-model">
+    Complete API documentation for all classes
+  </Card>
+</CardGroup>
+
+## Why ADK Utils?
+
+<Note>
+Google ADK provides [local model support for Python via litellm](https://google.github.io/adk-docs/agents/models/litellm/#setup), but there's no built-in way to use local Ollama models with TypeScript. ADK Utils fills this gap.
+</Note>
+
+<CardGroup cols={3}>
+  <Card title="TypeScript First" icon="code">
+    Built specifically for TypeScript developers using Google ADK
+  </Card>
+  <Card title="Developer Friendly" icon="heart">
+    Save tokens during development with local Ollama models
+  </Card>
+  <Card title="Production Ready" icon="check">
+    Seamlessly switch between local and cloud-hosted models
+  </Card>
+</CardGroup>
+
+## Community & Support
+
+<CardGroup cols={2}>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/YagoLopez/adk-utils">
+    View source code, report issues, and contribute
+  </Card>
+  <Card title="npm Package" icon="box" href="https://www.npmjs.com/package/@yagolopez/adk-utils">
+    View package on npm registry
+  </Card>
+</CardGroup>

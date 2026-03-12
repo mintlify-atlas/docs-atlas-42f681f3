@@ -1,0 +1,339 @@
+---
+title: Using Cloud-Hosted Ollama
+description: Step-by-step guide to setting up and using cloud-hosted Ollama models with ADK Utils
+---
+
+<Note>
+Cloud-hosted Ollama is ideal for production deployments and when you need consistent performance without managing local infrastructure.
+</Note>
+
+This guide walks you through setting up cloud-hosted Ollama models with Google's Agent Development Kit using ADK Utils.
+
+## Prerequisites
+
+- Node.js 18+ installed
+- Ollama account (sign up at [ollama.com](https://ollama.com))
+- Basic understanding of TypeScript
+- Familiarity with Google ADK concepts
+
+<Steps>
+
+<Step title="Get Your Ollama API Key">
+
+First, you need to obtain an API key from Ollama:
+
+1. Visit [https://ollama.com](https://ollama.com)
+2. Sign up or log in to your account
+3. Navigate to your account settings or API section
+4. Generate a new API key
+5. Copy the API key (you won't be able to see it again)
+
+<Warning>
+Keep your API key secure! Never commit it to version control or share it publicly.
+</Warning>
+
+</Step>
+
+<Step title="Set Up Environment Variables">
+
+Create a `.env` file in your project root:
+
+```bash .env
+OLLAMA_API_KEY=your_api_key_here
+```
+
+Add `.env` to your `.gitignore`:
+
+```bash .gitignore
+.env
+.env.local
+.env*.local
+```
+
+If you're using Next.js, you can also use `.env.local`:
+
+```bash .env.local
+OLLAMA_API_KEY=your_api_key_here
+```
+
+<Note>
+For production deployments (Vercel, Netlify, etc.), add the `OLLAMA_API_KEY` to your platform's environment variables settings.
+</Note>
+
+</Step>
+
+<Step title="Install Required Packages">
+
+Install the necessary dependencies:
+
+```bash
+npm install @yagolopez/adk-utils @google/adk @google/genai ollama
+```
+
+For environment variable management, you might also need:
+
+```bash
+npm install dotenv
+```
+
+</Step>
+
+<Step title="Create an Agent with Cloud Ollama">
+
+Create a new file `agent.ts` and configure your cloud-hosted agent:
+
+```typescript agent.ts
+import { OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+// Load environment variables if not using Next.js
+// import 'dotenv/config';
+
+// Create an instance of an ADK agent using a cloud-hosted Ollama model
+const agent = new LlmAgent({
+  name: 'CloudAgent',
+  model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+  description: 'A helpful assistant running on cloud Ollama',
+  instruction: `You are a helpful assistant that answers questions concisely and accurately.`,
+  tools: [], // Add your tools here if needed
+});
+
+export default agent;
+```
+
+**Key differences from local setup:**
+
+- **Base URL**: Use `'https://ollama.com'` instead of `'http://localhost:11434/v1'`
+- **Authentication**: The `OLLAMA_API_KEY` environment variable is automatically used by OllamaModel
+- **Model availability**: Use models available on Ollama's cloud platform
+
+</Step>
+
+<Step title="Verify Authentication">
+
+The `OllamaModel` class automatically includes your API key in requests:
+
+```typescript
+// From ollama-model.ts:48-52
+this.ollama = new Ollama({
+  host: this.baseURL,
+  headers: {
+    Authorization: `Bearer ${process.env.OLLAMA_API_KEY}`,
+  }
+});
+```
+
+You don't need to manually handle authentication—just ensure the environment variable is set.
+
+</Step>
+
+<Step title="Test Your Cloud Setup">
+
+Create a test script to verify the connection:
+
+```typescript test-cloud-agent.ts
+import agent from './agent';
+
+async function testCloudAgent() {
+  console.log('Testing cloud Ollama connection...');
+
+  try {
+    const response = agent.generateContentAsync({
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: 'Hello! Tell me a fun fact about clouds.' }]
+        }
+      ],
+      config: {}
+    });
+
+    console.log('Response from cloud Ollama:\n');
+
+    for await (const chunk of response) {
+      if (chunk.content?.parts) {
+        for (const part of chunk.content.parts) {
+          if ('text' in part) {
+            process.stdout.write(part.text);
+          }
+        }
+      }
+    }
+
+    console.log('\n\nCloud test complete!');
+  } catch (error) {
+    console.error('Error testing cloud agent:', error);
+  }
+}
+
+testCloudAgent();
+```
+
+Run the test:
+
+```bash
+npx tsx test-cloud-agent.ts
+```
+
+</Step>
+
+</Steps>
+
+## Available Cloud Models
+
+Popular models available on Ollama's cloud platform:
+
+```typescript
+// Lightweight models (faster, cheaper)
+const lightModel = new OllamaModel('qwen2.5:0.5b', 'https://ollama.com');
+const miniModel = new OllamaModel('phi3:mini', 'https://ollama.com');
+
+// Balanced models
+const balancedModel = new OllamaModel('llama3.2:3b', 'https://ollama.com');
+
+// More powerful models
+const powerfulModel = new OllamaModel('llama3.2:8b', 'https://ollama.com');
+const mistralModel = new OllamaModel('mistral:7b', 'https://ollama.com');
+```
+
+<Note>
+Check [ollama.com/models](https://ollama.com/models) for the complete list of available models and their capabilities.
+</Note>
+
+## Troubleshooting
+
+### Authentication Errors
+
+If you get authentication errors:
+
+1. **Verify your API key is set:**
+   ```bash
+   # Check if environment variable is loaded
+   echo $OLLAMA_API_KEY
+   ```
+
+2. **Regenerate your API key** if it's invalid or expired
+
+3. **Check for typos** in your `.env` file:
+   ```bash
+   # Should be exactly this:
+   OLLAMA_API_KEY=your_key_here
+   ```
+
+### Rate Limiting
+
+If you encounter rate limits:
+
+- Implement retry logic with exponential backoff
+- Monitor your usage on the Ollama dashboard
+- Consider upgrading your plan for higher limits
+
+### Environment Variables Not Loading
+
+**For Node.js projects:**
+
+```typescript
+// Add at the top of your entry file
+import 'dotenv/config';
+```
+
+**For Next.js projects:**
+
+- Ensure `.env.local` is in the project root
+- Restart your development server after adding variables
+- For API routes, variables are automatically loaded
+
+**For Vercel deployments:**
+
+1. Go to Project Settings → Environment Variables
+2. Add `OLLAMA_API_KEY` with your key
+3. Redeploy your application
+
+### Connection Timeouts
+
+If requests timeout:
+
+1. Check your internet connection
+2. Verify Ollama's service status
+3. Try a lighter model (e.g., `qwen2.5:0.5b`)
+4. Implement timeout handling:
+
+```typescript
+try {
+  const response = await agent.generateContentAsync({
+    contents: [/* ... */],
+    config: {}
+  });
+  // Process response...
+} catch (error) {
+  if (error.message.includes('timeout')) {
+    console.error('Request timed out. Please try again.');
+  }
+}
+```
+
+## Production Best Practices
+
+### Environment Management
+
+<CodeGroup>
+
+```typescript development
+// Use cloud Ollama for consistent development
+const model = new OllamaModel('qwen2.5:0.5b', 'https://ollama.com');
+```
+
+```typescript production
+// Use environment-based configuration
+const baseURL = process.env.NODE_ENV === 'production'
+  ? 'https://ollama.com'
+  : 'http://localhost:11434/v1';
+
+const model = new OllamaModel('qwen2.5:0.5b', baseURL);
+```
+
+</CodeGroup>
+
+### Error Handling
+
+```typescript
+async function safeGenerateContent(agent, messages) {
+  try {
+    return await agent.generateContentAsync({
+      contents: messages,
+      config: {}
+    });
+  } catch (error) {
+    console.error('Error generating content:', error);
+    // Implement fallback logic or retry
+    throw new Error('Failed to generate response. Please try again.');
+  }
+}
+```
+
+### Monitoring
+
+```typescript
+const startTime = Date.now();
+
+try {
+  const response = await agent.generateContentAsync(/* ... */);
+  // Process response...
+  
+  const duration = Date.now() - startTime;
+  console.log(`Request completed in ${duration}ms`);
+} catch (error) {
+  console.error('Request failed:', error);
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Ollama" icon="server" href="/guides/local-ollama">
+    Set up local Ollama for development
+  </Card>
+  <Card title="Next.js Integration" icon="react" href="/guides/nextjs-integration">
+    Integrate your agent with Next.js
+  </Card>
+</CardGroup>

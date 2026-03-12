@@ -1,0 +1,743 @@
+---
+title: "Streaming & SSE"
+description: "Understanding how GenAIAgentService handles streaming responses with Server-Sent Events"
+---
+
+## Overview
+
+The `GenAIAgentService` class provides a modular, production-ready implementation for handling agent interactions with native support for **streaming responses** and **Server-Sent Events (SSE)**. It manages the complete conversation loop, including multi-turn interactions and automatic tool execution.
+
+<Note>
+  This service is designed to work seamlessly with Next.js API routes and the Vercel AI SDK, but can be adapted for any framework that supports streaming responses.
+</Note>
+
+## Architecture
+
+```
+┌──────────────┐
+│   Frontend   │
+│  (Vercel AI) │
+└──────┬───────┘
+       │ POST /api/agent
+       │ { messages: [...] }
+       ▼
+┌─────────────────────┐
+│ GenAIAgentService   │
+│ ┌─────────────────┐ │
+│ │ 1. Validate     │ │
+│ │ 2. Transform    │ │
+│ │ 3. Stream Loop  │ │
+│ │    ├─ LLM call │ │
+│ │    ├─ Tool exec │ │
+│ │    └─ Repeat    │ │
+│ └─────────────────┘ │
+└──────┬──────────────┘
+       │ SSE Stream
+       │ data: {...}
+       ▼
+┌──────────────┐
+│   Frontend   │
+│  (renders)   │
+└──────────────┘
+```
+
+## Class Structure
+
+From `genai-agent-service.ts:29-41`, the service is initialized with an ADK agent:
+
+```typescript
+export class GenAIAgentService {
+  private agent: LlmAgent;
+  private model: BaseLlm;
+  private tools: ToolUnion[];
+  private encoder: TextEncoder;
+  private readonly MAX_TURNS = 5;
+
+  constructor(agent: LlmAgent) {
+    this.agent = agent;
+    this.model = agent.canonicalModel;
+    this.tools = agent.tools || [];
+    this.encoder = new TextEncoder();
+  }
+}
+```
+
+### Key Components
+
+- **agent**: The ADK `LlmAgent` instance containing model and tools
+- **model**: Direct reference to the LLM for generating responses
+- **tools**: Array of available tools the agent can call
+- **encoder**: TextEncoder for converting SSE strings to Uint8Array
+- **MAX_TURNS**: Limit on conversation turns to prevent infinite loops
+
+## Message Transformation
+
+The service accepts messages in Vercel AI SDK's `UIMessage` format and transforms them to ADK's `Content` format.
+
+### Input Format (UIMessage)
+
+```typescript
+interface UIMessage {
+  role: 'user' | 'assistant';
+  parts: Array<{
+    type: 'text';
+    text: string;
+  }>;
+}
+```
+
+### Transformation Logic
+
+From `genai-agent-service.ts:50-60`, the transformation maps roles and extracts text:
+
+```typescript
+transformMessagesToContents(messages: UIMessage[]): Content[] {
+  return messages.map(msg => ({
+    role: msg.role === 'user' ? 'user' : 'model',
+    parts: msg.parts
+      .filter(part => part.type === 'text')
+      .map(part => ({ text: part.text }))
+  }));
+}
+```
+
+### Validation
+
+From `genai-agent-service.ts:43-48`, messages are validated before processing:
+
+```typescript
+validateMessages(messages: UIMessage[] | undefined): messages is UIMessage[] {
+  return Boolean(messages && Array.isArray(messages) && messages.length > 0);
+}
+```
+
+## Server-Sent Events (SSE) Format
+
+SSE is a standard for streaming data from server to client. Each event follows this format:
+
+```
+data: {"type":"event-type","id":"optional-id","delta":"content"}
+
+```
+
+<Warning>
+  Each SSE message must end with two newlines (`\n\n`). This is critical for the browser's EventSource API to parse events correctly.
+</Warning>
+
+### SSE Chunk Interface
+
+From `genai-agent-service.ts:12-18`:
+
+```typescript
+interface SSEChunk {
+  type: string;           // Event type (start, text-delta, finish, etc.)
+  id?: string;            // Optional identifier
+  delta?: string;         // Text content for streaming
+  error?: string;         // Error message if applicable
+  finishReason?: string;  // Reason for completion
+}
+```
+
+### SSE Helper Methods
+
+From `genai-agent-service.ts:93-112`, the service provides utilities for SSE formatting:
+
+```typescript
+// Format a chunk as SSE string
+private formatSSEChunk(chunk: SSEChunk): string {
+  return `data: ${JSON.stringify(chunk)}\n\n`;
+}
+
+// Encode SSE string to Uint8Array for streaming
+private encodeSSEChunk(chunk: SSEChunk): Uint8Array {
+  return this.encoder.encode(this.formatSSEChunk(chunk));
+}
+
+// Send one or more chunks to the stream controller
+private sendSSEChunks(
+  controller: ReadableStreamDefaultController<Uint8Array>, 
+  ...chunks: SSEChunk[]
+): void {
+  chunks.forEach(chunk => controller.enqueue(this.encodeSSEChunk(chunk)));
+}
+```
+
+## Event Lifecycle
+
+### Start Events
+
+From `genai-agent-service.ts:114-122`, the stream begins with initialization events:
+
+```typescript
+private sendStartEvents(controller: ReadableStreamDefaultController<Uint8Array>): void {
+  this.sendSSEChunks(controller,
+    { type: 'start' },           // Stream begins
+    { type: 'start-step' },      // Step begins
+    { type: 'text-start', id: 'text-1' }  // Text generation starts
+  );
+}
+```
+
+**Sent events:**
+```
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"text-1"}
+
+```
+
+### Text Delta Events
+
+From `genai-agent-service.ts:136-172`, text is streamed incrementally:
+
+```typescript
+private processTextDelta(
+  part: Part,
+  textBuffer: string,
+  controller: ReadableStreamDefaultController<Uint8Array>
+): string {
+  if (!('text' in part) || !part.text) {
+    return textBuffer;
+  }
+
+  let delta = part.text;
+
+  // Handle accumulated text (Gemini behavior)
+  if (delta.startsWith(textBuffer) && textBuffer.length > 0) {
+    delta = delta.slice(textBuffer.length);
+    if (!delta) {
+      return textBuffer;
+    }
+  } else if (textBuffer.length > 0 && part.text === textBuffer) {
+    // Exact match - skip duplicate
+    return textBuffer;
+  }
+
+  if (delta) {
+    // Send text delta
+    this.sendSSEChunks(controller, {
+      type: 'text-delta',
+      id: 'text-1',
+      delta: delta
+    });
+    return textBuffer + delta;
+  }
+
+  return textBuffer;
+}
+```
+
+<Accordion title="Why Track Text Buffer?">
+  Some LLM providers (like Gemini) send **accumulated text** in each chunk rather than just the new delta. For example:
+  
+  ```
+  Chunk 1: "Hello"
+  Chunk 2: "Hello world"  <- Contains previous text
+  Chunk 3: "Hello world!"  <- Contains all previous text
+  ```
+  
+  The `textBuffer` tracks what we've already sent to avoid duplicates:
+  
+  ```typescript
+  // If new text starts with buffer, extract only the new part
+  if (delta.startsWith(textBuffer) && textBuffer.length > 0) {
+    delta = delta.slice(textBuffer.length);
+  }
+  ```
+</Accordion>
+
+**Example text deltas:**
+```
+data: {"type":"text-delta","id":"text-1","delta":"Hello"}
+
+data: {"type":"text-delta","id":"text-1","delta":" world"}
+
+data: {"type":"text-delta","id":"text-1","delta":"!"}
+
+```
+
+### End Events
+
+From `genai-agent-service.ts:124-132`, the stream closes with completion events:
+
+```typescript
+private sendEndEvents(controller: ReadableStreamDefaultController<Uint8Array>): void {
+  this.sendSSEChunks(controller,
+    { type: 'text-end', id: 'text-1' },     // Text generation complete
+    { type: 'finish-step' },                 // Step complete
+    { type: 'finish', finishReason: 'stop' } // Stream complete
+  );
+}
+```
+
+**Sent events:**
+```
+data: {"type":"text-end","id":"text-1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+```
+
+## Conversation Loop
+
+The service implements a **multi-turn conversation loop** that automatically handles tool calling and continues the conversation until completion.
+
+### Loop Flow Diagram
+
+```
+┌─────────────────────┐
+│  User Message(s)    │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Turn 1: LLM Call   │───┐
+└──────────┬──────────┘   │
+           │              │
+      ┌────▼────┐         │
+      │ Text?   │─YES────>│ Stream to client
+      └────┬────┘         │
+           │              │
+          NO              │
+           │              │
+      ┌────▼────┐         │
+      │ Tools?  │─YES─────┤
+      └────┬────┘         │
+           │              │
+          NO              │
+           │              │
+      ┌────▼────┐         │
+      │  Done   │<────────┘
+      └─────────┘
+           │
+      ┌────▼────────┐
+      │ Execute all │
+      │    tools    │
+      └────┬────────┘
+           │
+      ┌────▼────────┐
+      │ Turn 2: LLM │
+      │  with tool  │
+      │  responses  │
+      └────┬────────┘
+           │
+       (repeat up to MAX_TURNS)
+```
+
+### Single Turn
+
+From `genai-agent-service.ts:227-259`, each turn generates a response and collects function calls:
+
+```typescript
+private async streamTurn(
+  contents: Content[],
+  formattedTools: FormattedTool[],
+  controller: ReadableStreamDefaultController<Uint8Array>
+): Promise<{ functionCalls: Part[]; textBuffer: string }> {
+  const llmResponse = this.model.generateContentAsync({
+    contents,
+    config: { tools: formattedTools }
+  } as Partial<LlmRequest> as LlmRequest, true);
+
+  const functionCalls: Part[] = [];
+  let textBuffer = '';
+
+  for await (const chunk of llmResponse as AsyncIterable<StreamChunk>) {
+    if (chunk.content?.parts) {
+      for (const part of chunk.content.parts) {
+        // Handle Text
+        if ('text' in part && part.text) {
+          textBuffer = this.processTextDelta(part, textBuffer, controller);
+        }
+        // Handle Function Calls
+        if ('functionCall' in part) {
+          functionCalls.push(part);
+        }
+      }
+    }
+  }
+
+  return { functionCalls, textBuffer };
+}
+```
+
+### Tool Execution
+
+From `genai-agent-service.ts:196-225`, when function calls are detected, they're executed in parallel:
+
+```typescript
+private async processToolCalls(functionCalls: Part[]): Promise<Part[]> {
+  // Map each call to a promise
+  const toolPromises = functionCalls.map(async (callPart) => {
+    if (!callPart.functionCall) return null;
+
+    const call = callPart.functionCall;
+    if (!call.name) return null;
+    
+    const tool = this.findToolByName(call.name);
+    let toolResult: Record<string, unknown> = { error: 'Tool not found' };
+
+    if (tool) {
+      toolResult = await this.executeTool(
+        tool, 
+        (call.args || {}) as Record<string, unknown>
+      );
+    }
+    
+    return {
+      functionResponse: {
+        name: call.name,
+        response: {
+          name: call.name,
+          content: toolResult
+        }
+      }
+    } as Part;
+  });
+  
+  // Execute in parallel and filter out nulls
+  const results = await Promise.all(toolPromises);
+  return results.filter((part): part is Part => part !== null);
+}
+```
+
+<Note>
+  Tool execution happens in **parallel** for optimal performance. If you have 3 function calls, all 3 execute simultaneously.
+</Note>
+
+### Complete Loop
+
+From `genai-agent-service.ts:261-295`, the conversation continues until no more function calls:
+
+```typescript
+private async runConversationLoop(
+  initialContents: Content[],
+  formattedTools: FormattedTool[],
+  controller: ReadableStreamDefaultController<Uint8Array>
+): Promise<void> {
+  const currentContents = [...initialContents];
+  let turnCount = 0;
+
+  while (turnCount < this.MAX_TURNS) {
+    turnCount++;
+
+    const { functionCalls } = await this.streamTurn(
+      currentContents, 
+      formattedTools, 
+      controller
+    );
+
+    if (functionCalls.length > 0) {
+      // Add the model's tool calls to history
+      currentContents.push({
+        role: 'model',
+        parts: functionCalls
+      });
+
+      // Execute tools and add responses to history
+      const toolResponseParts = await this.processToolCalls(functionCalls);
+      currentContents.push({
+        role: 'tool',
+        parts: toolResponseParts
+      } as Content);
+    } else {
+      // No function calls, conversation complete
+      break;
+    }
+  }
+}
+```
+
+### Example Multi-Turn Flow
+
+<Tabs>
+  <Tab title="Turn 1">
+    **User:** "What's the weather in NYC?"
+
+    **LLM Response:**
+    ```json
+    {
+      "role": "model",
+      "parts": [
+        {
+          "functionCall": {
+            "name": "getWeather",
+            "args": { "city": "NYC" }
+          }
+        }
+      ]
+    }
+    ```
+
+    No text streamed yet. Tool call detected → execute tool.
+  </Tab>
+
+  <Tab title="Tool Execution">
+    **Execute:** `getWeather({ city: "NYC" })`
+
+    **Tool Response:**
+    ```json
+    {
+      "role": "tool",
+      "parts": [
+        {
+          "functionResponse": {
+            "name": "getWeather",
+            "response": {
+              "name": "getWeather",
+              "content": {
+                "temperature": 72,
+                "conditions": "sunny"
+              }
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+    Tool response added to conversation history → continue to Turn 2.
+  </Tab>
+
+  <Tab title="Turn 2">
+    **Conversation Context:**
+    1. User: "What's the weather in NYC?"
+    2. Model: [function call: getWeather]
+    3. Tool: [response: 72°, sunny]
+
+    **LLM Response:**
+    ```
+    data: {"type":"text-delta","id":"text-1","delta":"The"}
+
+    data: {"type":"text-delta","id":"text-1","delta":" weather"}
+
+    data: {"type":"text-delta","id":"text-1","delta":" in NYC"}
+
+    data: {"type":"text-delta","id":"text-1","delta":" is 72°"}
+
+    data: {"type":"text-delta","id":"text-1","delta":" and sunny!"}
+
+    ```
+
+    No more function calls → conversation complete.
+  </Tab>
+</Tabs>
+
+## Tool Declaration Formatting
+
+From `genai-agent-service.ts:69-91`, tools must be formatted for the GenAI API:
+
+```typescript
+formatToolsForGenAI(): FormattedTool[] {
+  return this.tools.map((t: ToolUnion) => {
+    // If it's already a GenAI Tool with function declarations, return as-is
+    if ('functionDeclarations' in t || 'function_declarations' in t) {
+      return t as unknown as FormattedTool;
+    }
+
+    // Otherwise, it's a BaseTool - extract its declaration
+    const baseTool = t as BaseTool;
+    const declaration = baseTool._getDeclaration();
+
+    if (!declaration) {
+      throw new Error(`Tool ${baseTool.name} does not have a declaration`);
+    }
+
+    return {
+      functionDeclarations: [declaration]
+    };
+  });
+}
+```
+
+This ensures tools are in the correct format:
+
+```typescript
+interface FormattedTool {
+  functionDeclarations: GenAIFunctionDeclaration[];
+}
+```
+
+## Creating Streaming Response
+
+From `genai-agent-service.ts:297-335`, the public API creates a streaming Response:
+
+```typescript
+createStreamingResponse(messages: UIMessage[]): Response {
+  const adkContents = this.transformMessagesToContents(messages);
+  const formattedTools = this.formatToolsForGenAI();
+
+  const stream = new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      try {
+        this.sendStartEvents(controller);
+        await this.runConversationLoop(adkContents, formattedTools, controller);
+        this.sendEndEvents(controller);
+        controller.close();
+      } catch (error) {
+        console.error('Error streaming response:', error);
+
+        // Send error as text so it is visible in the chat UI
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.sendSSEChunks(controller, {
+          type: 'text-delta',
+          id: 'text-1',
+          delta: `❌ System Error: ${errorMessage}`
+        });
+
+        this.sendEndEvents(controller);
+        controller.close();
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+```
+
+## Usage in Next.js API Route
+
+Here's a complete example from the README (lines 98-129):
+
+```typescript
+// app/api/genai-agent/route.ts
+
+import { GenAIAgentService, OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+export async function POST(req: Request) {
+  // Get user messages from the frontend
+  const { messages } = await req.json();
+    
+  // Create instance of ADK agent  
+  const agent = new LlmAgent({
+    name: 'my-agent',
+    model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+    description: 'Agent description',
+    instruction: `You are a helpful assistant...`,
+    tools: [...],
+  });
+  
+  // Create agent service to invoke the agent in the endpoint          
+  const service = new GenAIAgentService(agent);
+
+  // Check if the messages sent by the user are valid
+  if (!service.validateMessages(messages)) {
+    return GenAIAgentService.createErrorResponse('Invalid messages', 400);
+  }
+
+  // Invoke the agent with messages from the user and return streaming response
+  return service.createStreamingResponse(messages);
+}
+```
+
+## Error Handling
+
+From `genai-agent-service.ts:337-349`, static error response helper:
+
+```typescript
+static createErrorResponse(
+  message: string, 
+  status: number, 
+  details?: string
+): Response {
+  const body = details
+    ? { error: message, details }
+    : { error: message };
+
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+```
+
+**Usage:**
+
+```typescript
+if (!service.validateMessages(messages)) {
+  return GenAIAgentService.createErrorResponse(
+    'Invalid messages', 
+    400,
+    'Messages array must not be empty'
+  );
+}
+```
+
+## Best Practices
+
+<Accordion title="Set MAX_TURNS Appropriately">
+  The default `MAX_TURNS = 5` prevents infinite loops. Adjust based on your use case:
+  
+  - **Simple Q&A**: 2-3 turns
+  - **Multi-step tasks**: 5-10 turns
+  - **Complex workflows**: 10-15 turns
+  
+  ```typescript
+  // Increase max turns
+  const service = new GenAIAgentService(agent);
+  (service as any).MAX_TURNS = 10;
+  ```
+</Accordion>
+
+<Accordion title="Handle Network Errors">
+  ```typescript
+  export async function POST(req: Request) {
+    try {
+      const { messages } = await req.json();
+      const service = new GenAIAgentService(agent);
+      
+      if (!service.validateMessages(messages)) {
+        return GenAIAgentService.createErrorResponse('Invalid messages', 400);
+      }
+      
+      return service.createStreamingResponse(messages);
+    } catch (error) {
+      console.error('API error:', error);
+      return GenAIAgentService.createErrorResponse(
+        'Internal server error',
+        500,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Test with MockModel">
+  Use `MockModel` during development to avoid API costs:
+  
+  ```typescript
+  import { MockModel, GenAIAgentService } from '@yagolopez/adk-utils';
+  
+  const mockModel = new MockModel(
+    'test-model',
+    50, // 50ms delay
+    ['Testing', ' streaming', ' response']
+  );
+  
+  const agent = new LlmAgent({
+    name: 'TestAgent',
+    model: mockModel,
+    // ...
+  });
+  ```
+  
+  Learn more in [Testing with MockModel](/concepts/testing).
+</Accordion>
+
+## Related Resources
+
+- [Ollama Integration](/concepts/ollama-integration) - Using OllamaModel with GenAIAgentService
+- [Testing with MockModel](/concepts/testing) - Testing streaming without real APIs
+- [Vercel AI SDK](https://sdk.vercel.ai/docs) - Frontend integration

@@ -1,0 +1,241 @@
+---
+title: Using Local Ollama Models
+description: Step-by-step guide to setting up and using local Ollama models with ADK Utils
+---
+
+<Note>
+Local Ollama models are very convenient during development to save on API tokens and costs.
+</Note>
+
+This guide walks you through setting up local Ollama models and integrating them with Google's Agent Development Kit using ADK Utils.
+
+## Prerequisites
+
+- Node.js 18+ installed
+- Basic understanding of TypeScript
+- Familiarity with Google ADK concepts
+
+<Steps>
+
+<Step title="Install Ollama">
+
+First, install Ollama on your local machine:
+
+<CodeGroup>
+
+```bash macOS
+# Using Homebrew
+brew install ollama
+
+# Or download from https://ollama.com
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+```bash Linux
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+```bash Windows
+# Download the installer from https://ollama.com/download
+# Run the .exe installer
+```
+
+</CodeGroup>
+
+Verify the installation:
+
+```bash
+ollama --version
+```
+
+</Step>
+
+<Step title="Start the Ollama Service">
+
+Start the Ollama service on your local machine:
+
+```bash
+ollama serve
+```
+
+This will start Ollama on the default port `11434`. You should see output indicating the service is running:
+
+```
+Listening on http://localhost:11434
+```
+
+<Note>
+Keep this terminal window open while developing. Ollama needs to be running for your agents to work.
+</Note>
+
+</Step>
+
+<Step title="Pull a Model">
+
+Download a model to use locally. For development, lighter models like `qwen3:0.6b` or `qwen2.5:0.5b` are recommended:
+
+```bash
+ollama pull qwen3:0.6b
+```
+
+Other popular models you can try:
+
+```bash
+# Lightweight models (good for development)
+ollama pull qwen2.5:0.5b
+ollama pull phi3:mini
+
+# More powerful models (require more resources)
+ollama pull llama3.2:3b
+ollama pull mistral:7b
+```
+
+Verify your models:
+
+```bash
+ollama list
+```
+
+</Step>
+
+<Step title="Install ADK Utils">
+
+Install the required packages in your project:
+
+```bash
+npm install @yagolopez/adk-utils @google/adk @google/genai ollama
+```
+
+<Warning>
+Make sure to use the latest versions of these packages to avoid compatibility issues.
+</Warning>
+
+</Step>
+
+<Step title="Create an Agent with Local Ollama">
+
+Create a new file `agent.ts` and set up your agent:
+
+```typescript agent.ts
+import { OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+// Create an instance of an ADK agent using a local Ollama model
+const agent = new LlmAgent({
+  name: 'LocalAgent',
+  model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1'),
+  description: 'A helpful assistant running on local Ollama',
+  instruction: `You are a helpful assistant that answers questions concisely and accurately.`,
+  tools: [], // Add your tools here if needed
+});
+
+export default agent;
+```
+
+Key parameters for `OllamaModel`:
+
+- **First parameter**: Model name (must match the model you pulled)
+- **Second parameter**: Base URL for local Ollama (`http://localhost:11434/v1`)
+
+</Step>
+
+<Step title="Test Your Setup">
+
+Create a simple test script to verify everything works:
+
+```typescript test-agent.ts
+import agent from './agent';
+
+async function testAgent() {
+  const response = agent.generateContentAsync({
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: 'Hello! Can you tell me what 2+2 is?' }]
+      }
+    ],
+    config: {}
+  });
+
+  for await (const chunk of response) {
+    if (chunk.content?.parts) {
+      for (const part of chunk.content.parts) {
+        if ('text' in part) {
+          process.stdout.write(part.text);
+        }
+      }
+    }
+  }
+  console.log('\n\nTest complete!');
+}
+
+testAgent();
+```
+
+Run the test:
+
+```bash
+npx tsx test-agent.ts
+```
+
+You should see a streaming response from your local model!
+
+</Step>
+
+</Steps>
+
+## Troubleshooting
+
+### Connection Refused Error
+
+If you get a connection error:
+
+1. Make sure Ollama is running: `ollama serve`
+2. Verify the port is correct (default: 11434)
+3. Check your firewall settings
+
+### Model Not Found
+
+If you get a model not found error:
+
+```bash
+# List available models
+ollama list
+
+# Pull the missing model
+ollama pull qwen3:0.6b
+```
+
+### Performance Issues
+
+If responses are slow:
+
+1. Use lighter models (e.g., `qwen3:0.6b` instead of `llama3.2:8b`)
+2. Check your system resources (RAM, CPU)
+3. Close other resource-intensive applications
+
+### Port Already in Use
+
+If port 11434 is already in use:
+
+```bash
+# Start Ollama on a different port
+OLLAMA_HOST=0.0.0.0:11435 ollama serve
+```
+
+Then update your agent:
+
+```typescript
+model: new OllamaModel('qwen3:0.6b', 'http://localhost:11435/v1')
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Cloud Ollama" icon="cloud" href="/guides/cloud-ollama">
+    Learn how to use cloud-hosted Ollama models
+  </Card>
+  <Card title="Next.js Integration" icon="react" href="/guides/nextjs-integration">
+    Integrate your agent with Next.js
+  </Card>
+</CardGroup>

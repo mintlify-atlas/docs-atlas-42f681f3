@@ -1,0 +1,445 @@
+---
+title: "TypeScript Types"
+description: "Type definitions and interfaces used in ADK Utils"
+---
+
+## Overview
+
+This page documents the TypeScript types and interfaces exported by ADK Utils and used throughout the library.
+
+## Core Types
+
+### ToolDeclaration
+
+Describes a function/tool declaration for LLM function calling.
+
+```typescript
+interface ToolDeclaration {
+  name?: string;
+  description?: string;
+  parameters?: JSONSchema;
+}
+```
+
+<ResponseField name="name" type="string">
+  The name of the function/tool
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  A description of what the function does
+</ResponseField>
+
+<ResponseField name="parameters" type="JSONSchema">
+  JSON Schema describing the function parameters
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+const toolDecl: ToolDeclaration = {
+  name: 'get_weather',
+  description: 'Get current weather for a location',
+  parameters: {
+    type: 'object',
+    properties: {
+      location: { type: 'string' },
+      units: { type: 'string', enum: ['celsius', 'fahrenheit'] }
+    },
+    required: ['location']
+  }
+};
+```
+
+### FunctionCall
+
+Represents a function call made by the LLM.
+
+```typescript
+interface FunctionCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+```
+
+<ResponseField name="name" type="string" required>
+  The name of the function being called
+</ResponseField>
+
+<ResponseField name="args" type="Record<string, unknown>" required>
+  The arguments passed to the function
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+const functionCall: FunctionCall = {
+  name: 'get_weather',
+  args: {
+    location: 'San Francisco',
+    units: 'celsius'
+  }
+};
+```
+
+### JSONSchema
+
+JSON Schema definition for describing data structures.
+
+```typescript
+interface JSONSchema {
+  type?: string;
+  properties?: Record<string, JSONSchema>;
+  [key: string]: unknown;
+}
+```
+
+<ResponseField name="type" type="string">
+  The JSON Schema type (e.g., 'object', 'string', 'number')
+</ResponseField>
+
+<ResponseField name="properties" type="Record<string, JSONSchema>">
+  For objects, the properties definition
+</ResponseField>
+
+<ResponseField name="[key: string]" type="unknown">
+  Additional JSON Schema fields (required, enum, description, etc.)
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+const schema: JSONSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    age: { type: 'number' },
+    email: { type: 'string', format: 'email' }
+  },
+  required: ['name', 'email']
+};
+```
+
+## Streaming Types
+
+### StreamChunk
+
+Represents a chunk of content in a streaming response.
+
+```typescript
+interface StreamChunk {
+  content?: {
+    parts?: Part[];
+  };
+}
+```
+
+<ResponseField name="content" type="object">
+  The content object containing parts
+</ResponseField>
+
+<ResponseField name="content.parts" type="Part[]">
+  Array of content parts (from @google/genai)
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+for await (const chunk of stream) {
+  if (chunk.content?.parts) {
+    for (const part of chunk.content.parts) {
+      if ('text' in part) {
+        console.log(part.text);
+      }
+    }
+  }
+}
+```
+
+### SSEChunk
+
+Represents a Server-Sent Event chunk for streaming responses.
+
+```typescript
+interface SSEChunk {
+  type: string;
+  id?: string;
+  delta?: string;
+  error?: string;
+  finishReason?: string;
+}
+```
+
+<ResponseField name="type" type="string" required>
+  The event type (e.g., 'start', 'text-delta', 'finish')
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  Optional identifier for the chunk
+</ResponseField>
+
+<ResponseField name="delta" type="string">
+  Text content for text-delta events
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message for error events
+</ResponseField>
+
+<ResponseField name="finishReason" type="string">
+  Reason for stream completion
+</ResponseField>
+
+**Event Types:**
+
+<Accordion title="Common SSE Event Types">
+  - `start` - Stream initialization
+  - `start-step` - Beginning of conversation turn
+  - `text-start` - Before text streaming
+  - `text-delta` - Text chunk during streaming
+  - `text-end` - Text streaming complete
+  - `finish-step` - End of conversation turn
+  - `finish` - Stream completion
+</Accordion>
+
+**Usage Example:**
+
+```typescript
+const sseChunk: SSEChunk = {
+  type: 'text-delta',
+  id: 'text-1',
+  delta: 'Hello world'
+};
+
+const formatted = `data: ${JSON.stringify(sseChunk)}\n\n`;
+```
+
+### FormattedTool
+
+Tool format compatible with Google GenAI.
+
+```typescript
+interface FormattedTool {
+  functionDeclarations: GenAIFunctionDeclaration[];
+}
+```
+
+<ResponseField name="functionDeclarations" type="GenAIFunctionDeclaration[]" required>
+  Array of function declarations in GenAI format
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+const formattedTool: FormattedTool = {
+  functionDeclarations: [
+    {
+      name: 'get_weather',
+      description: 'Get current weather',
+      parameters: {
+        type: 'object',
+        properties: {
+          location: { type: 'string' }
+        }
+      }
+    }
+  ]
+};
+```
+
+## Ollama Types
+
+### OllamaMessageWithToolCalls
+
+Ollama message format extended with tool calls.
+
+```typescript
+interface OllamaMessageWithToolCalls extends OllamaMessage {
+  tool_calls?: Array<{
+    function: {
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+  }>;
+}
+```
+
+<ResponseField name="role" type="string" required>
+  Message role: 'user', 'assistant', or 'tool'
+</ResponseField>
+
+<ResponseField name="content" type="string" required>
+  Message text content
+</ResponseField>
+
+<ResponseField name="tool_calls" type="object[]">
+  Optional array of tool/function calls
+</ResponseField>
+
+**Usage Example:**
+
+```typescript
+const message: OllamaMessageWithToolCalls = {
+  role: 'assistant',
+  content: 'Let me check the weather for you.',
+  tool_calls: [
+    {
+      function: {
+        name: 'get_weather',
+        arguments: { location: 'New York' }
+      }
+    }
+  ]
+};
+```
+
+## External Types
+
+ADK Utils also re-exports and uses types from its dependencies:
+
+### From @google/adk
+
+```typescript
+import type {
+  BaseLlm,
+  BaseLlmConnection,
+  LlmRequest,
+  LlmResponse,
+  ToolUnion,
+  BaseTool,
+  ToolContext,
+  LlmAgent
+} from '@google/adk';
+```
+
+<Accordion title="BaseLlm">
+  Base class for all LLM implementations. Extended by `OllamaModel` and `MockModel`.
+</Accordion>
+
+<Accordion title="LlmRequest">
+  Request object passed to `generateContentAsync`. Contains `contents` and optional `config`.
+</Accordion>
+
+<Accordion title="LlmResponse">
+  Response object yielded by `generateContentAsync`. Contains `content` and optional `partial` flag.
+</Accordion>
+
+<Accordion title="LlmAgent">
+  Agent class from ADK that orchestrates model and tools.
+</Accordion>
+
+### From @google/genai
+
+```typescript
+import type {
+  Content,
+  Part,
+  FunctionDeclaration as GenAIFunctionDeclaration
+} from '@google/genai';
+```
+
+<Accordion title="Content">
+  Message content format used by GenAI. Has `role` and `parts` fields.
+</Accordion>
+
+<Accordion title="Part">
+  Individual content part. Can contain `text`, `functionCall`, or `functionResponse`.
+</Accordion>
+
+### From ai (Vercel AI SDK)
+
+```typescript
+import type { UIMessage } from 'ai';
+```
+
+<Accordion title="UIMessage">
+  Message format from Vercel AI SDK's `useChat` hook. Converted to `Content` by `GenAIAgentService`.
+</Accordion>
+
+### From ollama
+
+```typescript
+import type {
+  Tool as OllamaTool,
+  Message as OllamaMessage,
+  ChatRequest
+} from 'ollama';
+```
+
+## Type Usage Examples
+
+### Creating a Custom Tool
+
+```typescript
+import { tool } from '@google/adk';
+import { z } from 'zod';
+import type { ToolDeclaration } from '@yagolopez/adk-utils';
+
+const weatherTool = tool(
+  z.object({
+    location: z.string(),
+    units: z.enum(['celsius', 'fahrenheit']).optional(),
+  }),
+  async ({ location, units = 'celsius' }) => {
+    return { temperature: 72, units, location };
+  },
+  {
+    name: 'get_weather',
+    description: 'Get current weather for a location',
+  }
+);
+```
+
+### Handling Streaming Responses
+
+```typescript
+import type { StreamChunk, SSEChunk } from '@yagolopez/adk-utils';
+
+async function handleStream(stream: AsyncIterable<StreamChunk>) {
+  for await (const chunk of stream) {
+    if (chunk.content?.parts) {
+      for (const part of chunk.content.parts) {
+        if ('text' in part) {
+          console.log('Text:', part.text);
+        }
+        if ('functionCall' in part) {
+          console.log('Function call:', part.functionCall);
+        }
+      }
+    }
+  }
+}
+```
+
+### Working with Messages
+
+```typescript
+import type { UIMessage, Content } from '@yagolopez/adk-utils';
+import { GenAIAgentService } from '@yagolopez/adk-utils';
+
+const uiMessages: UIMessage[] = [
+  {
+    role: 'user',
+    parts: [{ type: 'text', text: 'Hello' }]
+  }
+];
+
+const service = new GenAIAgentService(agent);
+const contents: Content[] = service.transformMessagesToContents(uiMessages);
+```
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="OllamaModel API" icon="server" href="/api/ollama-model">
+    OllamaModel class reference
+  </Card>
+  <Card title="GenAIAgentService API" icon="stream" href="/api/genai-agent-service">
+    GenAIAgentService class reference
+  </Card>
+  <Card title="MockModel API" icon="flask" href="/api/mock-model">
+    MockModel class reference
+  </Card>
+  <Card title="Google ADK Docs" icon="book" href="https://google.github.io/adk-docs/">
+    Official ADK documentation
+  </Card>
+</CardGroup>

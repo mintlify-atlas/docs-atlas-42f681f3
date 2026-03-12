@@ -1,0 +1,226 @@
+---
+title: Installation
+description: Install and configure ADK Utils for your TypeScript project
+---
+
+## Prerequisites
+
+Before installing ADK Utils, ensure you have:
+
+- **Node.js** 18+ installed
+- **npm**, **yarn**, or **pnpm** as your package manager
+- (Optional) **Ollama** installed locally for local model development
+
+## Package Installation
+
+<Steps>
+  <Step title="Install ADK Utils">
+    Install the package using your preferred package manager:
+
+    <CodeGroup>
+      ```bash npm
+      npm install @yagolopez/adk-utils
+      ```
+
+      ```bash yarn
+      yarn add @yagolopez/adk-utils
+      ```
+
+      ```bash pnpm
+      pnpm add @yagolopez/adk-utils
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install Peer Dependencies">
+    ADK Utils requires several peer dependencies to function properly. Install them with:
+
+    <CodeGroup>
+      ```bash npm
+      npm install @google/adk @google/genai ai ollama
+      ```
+
+      ```bash yarn
+      yarn add @google/adk @google/genai ai ollama
+      ```
+
+      ```bash pnpm
+      pnpm add @google/adk @google/genai ai ollama
+      ```
+    </CodeGroup>
+
+    <Note>
+      **Always use the latest versions** of these packages to avoid compatibility issues. The minimum supported versions are:
+      - `@google/adk`: ^0.3.0
+      - `@google/genai`: ^1.40.0
+      - `ai`: ^6.0.81 (Vercel AI SDK)
+      - `ollama`: ^0.6.3
+    </Note>
+
+    ### Why These Dependencies?
+
+    - **@google/adk**: Google's Agent Development Kit - the core framework for building agents
+    - **@google/genai**: Google's Generative AI SDK for type definitions and utilities
+    - **ai**: Vercel AI SDK for streaming and UI components
+    - **ollama**: Official Ollama JavaScript client for communicating with Ollama models
+  </Step>
+
+  <Step title="Set Up Local Ollama (Optional)">
+    If you want to use local models during development, install and configure Ollama:
+
+    ### Install Ollama
+
+    Visit [ollama.com](https://ollama.com) and download the installer for your platform, or use:
+
+    <CodeGroup>
+      ```bash macOS/Linux
+      curl -fsSL https://ollama.com/install.sh | sh
+      ```
+
+      ```bash Windows
+      # Download from https://ollama.com/download/windows
+      ```
+    </CodeGroup>
+
+    ### Start Ollama Server
+
+    Start the Ollama service (it will run on `http://localhost:11434` by default):
+
+    ```bash
+    ollama serve
+    ```
+
+    ### Pull a Model
+
+    Download a lightweight model for development:
+
+    ```bash
+    # Very lightweight model for testing (~0.5GB)
+    ollama pull qwen2.5:0.5b
+
+    # Alternative lightweight options
+    ollama pull qwen3:0.6b
+    ollama pull llama3.2:1b
+    ```
+
+    <Tip>
+      For development, we recommend starting with `qwen2.5:0.5b` or `qwen3:0.6b` as they're fast and require minimal resources. You can always switch to larger models like `llama3.2:3b` or `qwen2.5:7b` for better quality.
+    </Tip>
+
+    ### Verify Installation
+
+    Test that Ollama is working:
+
+    ```bash
+    ollama run qwen2.5:0.5b "Hello, how are you?"
+    ```
+  </Step>
+
+  <Step title="Set Up Cloud Ollama (Optional)">
+    If you prefer to use cloud-hosted Ollama models instead of running them locally:
+
+    ### Get Your API Key
+
+    1. Visit [ollama.com](https://ollama.com) and sign up for an account
+    2. Navigate to your account settings and generate an API key
+
+    ### Configure Environment Variable
+
+    Create a `.env.local` file in your project root (for Next.js) or `.env`:
+
+    ```bash .env.local
+    OLLAMA_API_KEY=your_api_key_here
+    ```
+
+    <Warning>
+      Never commit your `.env.local` or `.env` file to version control. Add it to your `.gitignore`:
+      
+      ```bash .gitignore
+      .env.local
+      .env
+      ```
+    </Warning>
+
+    ### Verify Cloud Access
+
+    Test your API key with a simple script:
+
+    ```typescript test-ollama.ts
+    import { Ollama } from 'ollama';
+
+    const ollama = new Ollama({
+      host: 'https://ollama.com',
+      headers: {
+        Authorization: `Bearer ${process.env.OLLAMA_API_KEY}`,
+      }
+    });
+
+    const response = await ollama.chat({
+      model: 'qwen2.5:0.5b',
+      messages: [{ role: 'user', content: 'Hello!' }],
+    });
+
+    console.log(response.message.content);
+    ```
+  </Step>
+</Steps>
+
+## TypeScript Configuration
+
+If you're using TypeScript, ensure your `tsconfig.json` includes proper module resolution:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+## Verification
+
+Verify your installation by creating a simple test file:
+
+```typescript test.ts
+import { OllamaModel, MockModel, GenAIAgentService } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+console.log('✅ ADK Utils installed successfully!');
+console.log('Available exports:', {
+  OllamaModel: typeof OllamaModel,
+  MockModel: typeof MockModel,
+  GenAIAgentService: typeof GenAIAgentService
+});
+```
+
+Run it with:
+
+```bash
+npx tsx test.ts
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card 
+    title="Quickstart Tutorial" 
+    icon="rocket" 
+    href="/quickstart"
+  >
+    Build your first agent in under 5 minutes
+  </Card>
+  
+  <Card 
+    title="Local Ollama Guide" 
+    icon="book" 
+    href="/guides/local-ollama"
+  >
+    Learn how to use local Ollama models
+  </Card>
+</CardGroup>

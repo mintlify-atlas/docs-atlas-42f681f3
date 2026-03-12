@@ -1,0 +1,614 @@
+---
+title: E2E Testing with Playwright
+description: Guide to using MockModel for end-to-end testing without API costs or dependencies
+---
+
+<Note>
+`MockModel` allows you to test your application's UI and agent logic without needing a running Ollama instance or incurring API costs.
+</Note>
+
+This guide shows you how to write comprehensive end-to-end tests for your ADK Utils applications using Playwright and MockModel.
+
+## Why Use MockModel for Testing?
+
+### Benefits
+
+<CardGroup cols={2}>
+  <Card title="No API Costs" icon="dollar-sign">
+    Test without consuming API tokens or credits
+  </Card>
+  <Card title="No Dependencies" icon="plug">
+    No need for running Ollama or network connections
+  </Card>
+  <Card title="Deterministic" icon="check">
+    Predictable responses make tests reliable
+  </Card>
+  <Card title="Fast" icon="bolt">
+    Tests run instantly without API latency
+  </Card>
+</CardGroup>
+
+### When to Use MockModel
+
+✅ **Use MockModel for:**
+- Unit tests of agent logic
+- End-to-end UI tests
+- CI/CD pipelines
+- Testing error handling
+- Rapid development iterations
+
+❌ **Use real models for:**
+- Integration tests
+- Performance benchmarks
+- Validating actual model behavior
+- Production environments
+
+## Setup
+
+### Install Playwright
+
+```bash
+npm install -D @playwright/test
+npx playwright install
+```
+
+### Project Structure
+
+For a Next.js project with tests:
+
+```
+my-app/
+├── app/
+│   └── api/
+│       └── genai-agent/
+│           └── route.ts
+├── tests/
+│   └── chat.spec.ts
+├── playwright.config.ts
+└── package.json
+```
+
+### Configure Playwright
+
+Create `playwright.config.ts`:
+
+```typescript playwright.config.ts
+import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+  use: {
+    baseURL: 'http://localhost:3000',
+    trace: 'on-first-retry',
+  },
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+  webServer: {
+    command: 'npm run dev',
+    url: 'http://localhost:3000',
+    reuseExistingServer: !process.env.CI,
+  },
+});
+```
+
+## Writing Tests with MockModel
+
+### Basic Chat Test
+
+This is the complete example from the README.md showing how to test chat functionality:
+
+```typescript tests/chat.spec.ts
+import { test, expect } from "@playwright/test";
+import { MockModel, GenAIAgentService } from "@yagolopez/adk-utils";
+import { LlmAgent } from "@google/adk";
+
+test.describe("Chat Functionality", () => {
+  test("user can send a message and receive a response", async ({ page }) => {
+    // Intercept the API route and mock the response
+    await page.route("/api/genai-agent", async (route) => {
+      const { messages } = route.request().postDataJSON();
+
+      // Create agent with mock model
+      const agent = new LlmAgent({
+        name: "test_agent",
+        description: "test-description",
+        model: new MockModel("mock-model", 0, ["Response from mock model"]),
+        instruction: "You are a test agent.",
+      });
+
+      const service = new GenAIAgentService(agent);
+      const response = service.createStreamingResponse(messages);
+      const bodyBuffer = await response.arrayBuffer();
+
+      await route.fulfill({
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        contentType:
+          response.headers.get("content-type") || "text/event-stream",
+        body: Buffer.from(bodyBuffer),
+      });
+    });
+
+    // Navigate to the app
+    await page.goto("/");
+
+    // Type a message
+    const input = page.getByPlaceholder("Ask the agent...");
+    await input.fill("hola");
+
+    // Send the message
+    const sendButton = page.getByRole("button", { name: "Send message" });
+    await sendButton.click();
+
+    // Verify the mocked response appears
+    await expect(page.getByText("Response from mock model")).toBeVisible();
+  });
+});
+```
+
+### Understanding the Test Flow
+
+<Steps>
+
+<Step title="Route Interception">
+
+```typescript
+await page.route("/api/genai-agent", async (route) => {
+  // Intercept API calls to this endpoint
+});
+```
+
+Playwright intercepts network requests before they reach your actual API.
+
+</Step>
+
+<Step title="Mock Model Creation">
+
+```typescript
+const agent = new LlmAgent({
+  name: "test_agent",
+  description: "test-description",
+  model: new MockModel("mock-model", 0, ["Response from mock model"]),
+  instruction: "You are a test agent.",
+});
+```
+
+**MockModel parameters:**
+- `"mock-model"`: Model name (arbitrary for testing)
+- `0`: Delay in milliseconds between chunks (0 = instant)
+- `["Response from mock model"]`: Array of response chunks
+
+</Step>
+
+<Step title="Service Invocation">
+
+```typescript
+const service = new GenAIAgentService(agent);
+const response = service.createStreamingResponse(messages);
+const bodyBuffer = await response.arrayBuffer();
+```
+
+The service processes the request using the mock model and returns a streaming response.
+
+</Step>
+
+<Step title="Response Fulfillment">
+
+```typescript
+await route.fulfill({
+  status: response.status,
+  headers: Object.fromEntries(response.headers.entries()),
+  contentType: response.headers.get("content-type") || "text/event-stream",
+  body: Buffer.from(bodyBuffer),
+});
+```
+
+The mock response is sent back to the browser as if it came from the real API.
+
+</Step>
+
+</Steps>
+
+## Advanced Testing Patterns
+
+### Testing Streaming Responses
+
+<Accordion title="Multiple Chunks Test">
+
+Test that your UI correctly handles multiple streaming chunks:
+
+```typescript tests/streaming.spec.ts
+import { test, expect } from "@playwright/test";
+import { MockModel, GenAIAgentService } from "@yagolopez/adk-utils";
+import { LlmAgent } from "@google/adk";
+
+test("handles streaming chunks correctly", async ({ page }) => {
+  await page.route("/api/genai-agent", async (route) => {
+    const { messages } = route.request().postDataJSON();
+
+    // Create mock with multiple chunks
+    const agent = new LlmAgent({
+      name: "streaming_agent",
+      description: "Streaming test agent",
+      model: new MockModel(
+        "mock-model",
+        50, // 50ms delay between chunks
+        ["Hello", " world", "! This", " is", " streaming."]
+      ),
+      instruction: "You are a test agent.",
+    });
+
+    const service = new GenAIAgentService(agent);
+    const response = service.createStreamingResponse(messages);
+    const bodyBuffer = await response.arrayBuffer();
+
+    await route.fulfill({
+      status: response.status,
+      headers: Object.fromEntries(response.headers.entries()),
+      contentType: "text/event-stream",
+      body: Buffer.from(bodyBuffer),
+    });
+  });
+
+  await page.goto("/");
+  
+  const input = page.getByPlaceholder("Ask the agent...");
+  await input.fill("Test streaming");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  // Wait for the complete message to appear
+  await expect(page.getByText("Hello world! This is streaming.")).toBeVisible({
+    timeout: 5000, // Allow time for all chunks
+  });
+});
+```
+
+</Accordion>
+
+### Testing Error Handling
+
+<Accordion title="Error Handling Test">
+
+Test how your UI handles errors:
+
+```typescript tests/errors.spec.ts
+import { test, expect } from "@playwright/test";
+
+test("displays error message when API fails", async ({ page }) => {
+  // Mock a failed API response
+  await page.route("/api/genai-agent", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: "Internal server error",
+        details: "Model unavailable"
+      }),
+    });
+  });
+
+  await page.goto("/");
+  
+  const input = page.getByPlaceholder("Ask the agent...");
+  await input.fill("Test error");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  // Verify error message is displayed
+  await expect(page.getByText(/error/i)).toBeVisible();
+});
+```
+
+</Accordion>
+
+### Testing Different Response Patterns
+
+<Accordion title="Dynamic Response Test">
+
+Test with dynamic responses based on user input:
+
+```typescript tests/dynamic-responses.spec.ts
+import { test, expect } from "@playwright/test";
+import { MockModel, GenAIAgentService } from "@yagolopez/adk-utils";
+import { LlmAgent } from "@google/adk";
+
+test("responds differently based on user input", async ({ page }) => {
+  await page.route("/api/genai-agent", async (route) => {
+    const { messages } = route.request().postDataJSON();
+    const lastMessage = messages[messages.length - 1];
+    const userText = lastMessage.parts[0].text.toLowerCase();
+
+    // Choose response based on input
+    let responseChunks;
+    if (userText.includes("hello")) {
+      responseChunks = ["Hello! How can I help you today?"];
+    } else if (userText.includes("weather")) {
+      responseChunks = ["The weather is sunny and 72°F."];
+    } else {
+      responseChunks = ["I'm here to help!"];
+    }
+
+    const agent = new LlmAgent({
+      name: "dynamic_agent",
+      description: "Dynamic test agent",
+      model: new MockModel("mock-model", 0, responseChunks),
+      instruction: "You are a test agent.",
+    });
+
+    const service = new GenAIAgentService(agent);
+    const response = service.createStreamingResponse(messages);
+    const bodyBuffer = await response.arrayBuffer();
+
+    await route.fulfill({
+      status: response.status,
+      headers: Object.fromEntries(response.headers.entries()),
+      contentType: "text/event-stream",
+      body: Buffer.from(bodyBuffer),
+    });
+  });
+
+  await page.goto("/");
+  
+  // Test "hello" response
+  await page.getByPlaceholder("Ask the agent...").fill("hello");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Hello! How can I help you today?")).toBeVisible();
+  
+  // Test "weather" response
+  await page.getByPlaceholder("Ask the agent...").fill("what's the weather?");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("The weather is sunny and 72°F.")).toBeVisible();
+});
+```
+
+</Accordion>
+
+## MockModel API Reference
+
+### Constructor
+
+```typescript
+new MockModel(
+  modelName?: string,
+  delay?: number,
+  chunks?: string[]
+)
+```
+
+**Parameters:**
+- `modelName`: Arbitrary model name (default: `'mock-model'`)
+- `delay`: Milliseconds between chunks (default: `0`)
+- `chunks`: Array of response strings (default: `["Hello", " world", "!"]`)
+
+### Methods
+
+```typescript
+// Change the mock response dynamically
+mockModel.setMockResponse(['New', ' response']);
+
+// Change the delay between chunks
+mockModel.setResponseDelay(100);
+```
+
+### Example Usage
+
+```typescript
+import { MockModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+// Create a mock model with custom response
+const mockModel = new MockModel(
+  'test-model',
+  50, // 50ms delay between chunks
+  ['Hello', ' this is', ' a mock response']
+);
+
+const agent = new LlmAgent({
+  name: 'MockAgent',
+  model: mockModel,
+  description: 'Testing Agent',
+  instruction: 'You are a test agent',
+});
+
+// Later, change the response
+mockModel.setMockResponse(['Different', ' response']);
+mockModel.setResponseDelay(100);
+```
+
+## Running Tests
+
+### Run All Tests
+
+```bash
+npx playwright test
+```
+
+### Run Specific Test File
+
+```bash
+npx playwright test tests/chat.spec.ts
+```
+
+### Run in UI Mode (Interactive)
+
+```bash
+npx playwright test --ui
+```
+
+### Run with Browser Visible
+
+```bash
+npx playwright test --headed
+```
+
+### Debug Tests
+
+```bash
+npx playwright test --debug
+```
+
+## Best Practices
+
+### 1. Keep Mocks Simple
+
+```typescript
+// ✅ Good: Simple, focused response
+const mockModel = new MockModel('mock', 0, ['Test response']);
+
+// ❌ Avoid: Overly complex responses
+const mockModel = new MockModel('mock', 0, [
+  'This is a very long response that includes multiple paragraphs...',
+  'and continues for several lines...'
+]);
+```
+
+### 2. Test One Thing at a Time
+
+```typescript
+// ✅ Good: Tests one specific behavior
+test('displays message after sending', async ({ page }) => {
+  // Test only the message display functionality
+});
+
+// ❌ Avoid: Testing multiple unrelated things
+test('app works correctly', async ({ page }) => {
+  // Tests navigation, messaging, error handling, etc.
+});
+```
+
+### 3. Use Descriptive Mocks
+
+```typescript
+// ✅ Good: Clear what's being tested
+const successResponse = new MockModel('mock', 0, ['Operation successful']);
+const errorResponse = new MockModel('mock', 0, ['Error: Operation failed']);
+
+// ❌ Avoid: Generic responses
+const model = new MockModel('mock', 0, ['response']);
+```
+
+### 4. Handle Timing Issues
+
+```typescript
+// ✅ Good: Account for streaming delay
+const mockModel = new MockModel('mock', 50, ['Hello', ' world']);
+await expect(page.getByText('Hello world')).toBeVisible({ timeout: 5000 });
+
+// ❌ Avoid: Expecting instant responses
+await expect(page.getByText('Hello world')).toBeVisible(); // May fail
+```
+
+## Troubleshooting
+
+### Test Times Out
+
+**Issue**: Test fails with timeout error.
+
+**Solution**: Increase timeout or reduce mock delay:
+
+```typescript
+// Option 1: Increase timeout
+await expect(page.getByText('Response')).toBeVisible({ timeout: 10000 });
+
+// Option 2: Reduce mock delay
+const mockModel = new MockModel('mock', 0, ['Response']); // 0ms delay
+```
+
+### Response Not Appearing
+
+**Issue**: Mocked response doesn't show in UI.
+
+**Solution**: Check route path and ensure it matches your API:
+
+```typescript
+// Make sure this matches your actual API route
+await page.route("/api/genai-agent", async (route) => {
+  // Your mock logic
+});
+```
+
+### Type Errors with Messages
+
+**Issue**: TypeScript errors with message format.
+
+**Solution**: Ensure correct message structure:
+
+```typescript
+const { messages } = route.request().postDataJSON();
+// messages should be UIMessage[] from 'ai' package
+```
+
+### Headers Not Set Correctly
+
+**Issue**: Streaming doesn't work in tests.
+
+**Solution**: Ensure correct content type:
+
+```typescript
+await route.fulfill({
+  status: response.status,
+  headers: Object.fromEntries(response.headers.entries()),
+  contentType: 'text/event-stream', // Important for streaming
+  body: Buffer.from(bodyBuffer),
+});
+```
+
+## CI/CD Integration
+
+### GitHub Actions Example
+
+```yaml .github/workflows/test.yml
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Install Playwright
+        run: npx playwright install --with-deps
+        
+      - name: Run tests
+        run: npx playwright test
+        
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Next.js Integration" icon="react" href="/guides/nextjs-integration">
+    Build a complete Next.js app with agents
+  </Card>
+  <Card title="MockModel API" icon="code" href="/api/mock-model">
+    Complete MockModel API reference
+  </Card>
+</CardGroup>

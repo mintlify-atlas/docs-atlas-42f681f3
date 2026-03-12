@@ -1,0 +1,246 @@
+---
+title: "OllamaModel"
+description: "API reference for the OllamaModel class"
+---
+
+## Overview
+
+`OllamaModel` is a custom implementation of Google ADK's `BaseLlm` that enables integration with both local and cloud-hosted Ollama models. It handles message format conversion, streaming responses, and function calling (tool usage).
+
+## Class Definition
+
+```typescript
+export class OllamaModel extends BaseLlm {
+  constructor(modelName?: string, baseURL?: string)
+  async *generateContentAsync(llmRequest: LlmRequest, stream?: boolean): AsyncGenerator<LlmResponse, void>
+}
+```
+
+## Constructor
+
+Creates a new instance of OllamaModel.
+
+<ParamField path="modelName" type="string" default="'qwen3:0.6b'">
+  The name of the Ollama model to use (e.g., `'qwen3:0.6b'`, `'llama2'`, `'mistral'`)
+</ParamField>
+
+<ParamField path="baseURL" type="string" default="'http://localhost:11434/v1'">
+  The base URL for the Ollama API:
+  - Local: `'http://localhost:11434/v1'`
+  - Cloud: `'https://ollama.com'`
+</ParamField>
+
+### Usage Examples
+
+<Tabs>
+  <Tab title="Local Ollama">
+    ```typescript
+    import { OllamaModel } from '@yagolopez/adk-utils';
+    import { LlmAgent } from '@google/adk';
+
+    // Create an agent with a local Ollama model
+    const agent = new LlmAgent({
+      name: 'local-agent',
+      model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1'),
+      description: 'Agent using local Ollama',
+      instruction: 'You are a helpful assistant',
+    });
+    ```
+  </Tab>
+  <Tab title="Cloud Ollama">
+    ```typescript
+    import { OllamaModel } from '@yagolopez/adk-utils';
+    import { LlmAgent } from '@google/adk';
+
+    // Requires OLLAMA_API_KEY environment variable
+    const agent = new LlmAgent({
+      name: 'cloud-agent',
+      model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+      description: 'Agent using cloud Ollama',
+      instruction: 'You are a helpful assistant',
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Properties
+
+<ResponseField name="model" type="string">
+  The name of the Ollama model being used
+</ResponseField>
+
+<ResponseField name="baseURL" type="string" private>
+  The base URL for the Ollama API (private, read-only)
+</ResponseField>
+
+<ResponseField name="ollama" type="Ollama" private>
+  The Ollama client instance (private)
+</ResponseField>
+
+## Methods
+
+### generateContentAsync
+
+Generates content from the model, with optional streaming support.
+
+```typescript
+async *generateContentAsync(
+  llmRequest: LlmRequest,
+  stream: boolean = true
+): AsyncGenerator<LlmResponse, void>
+```
+
+<ParamField path="llmRequest" type="LlmRequest" required>
+  The request object containing:
+  - `contents`: Array of conversation messages
+  - `config.tools`: Optional array of tool declarations for function calling
+</ParamField>
+
+<ParamField path="stream" type="boolean" default="true">
+  Whether to stream the response or return it all at once
+</ParamField>
+
+**Returns**: An async generator yielding `LlmResponse` objects
+
+#### Response Types
+
+<Tabs>
+  <Tab title="Text Response">
+    ```typescript
+    {
+      content: {
+        role: 'model',
+        parts: [{ text: 'response text' }]
+      },
+      partial: true  // true for streaming, false for complete
+    }
+    ```
+  </Tab>
+  <Tab title="Function Call">
+    ```typescript
+    {
+      content: {
+        role: 'model',
+        parts: [{
+          functionCall: {
+            name: 'function_name',
+            args: { /* arguments */ }
+          }
+        }]
+      },
+      partial: false
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### connect
+
+```typescript
+connect(): Promise<BaseLlmConnection>
+```
+
+<Warning>
+Live connections are not supported. This method throws an error if called.
+</Warning>
+
+## Function Calling Support
+
+OllamaModel fully supports function calling (tool usage) through ADK's tool system.
+
+```typescript
+import { OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent, tool } from '@google/adk';
+import { z } from 'zod';
+
+// Define a tool
+const weatherTool = tool(
+  z.object({
+    location: z.string().describe('The city name'),
+    units: z.enum(['celsius', 'fahrenheit']).optional(),
+  }),
+  async ({ location, units = 'celsius' }) => {
+    // Implementation
+    return { temperature: 22, units, location };
+  },
+  {
+    name: 'get_weather',
+    description: 'Get the current weather for a location',
+  }
+);
+
+// Create agent with tools
+const agent = new LlmAgent({
+  name: 'weather-agent',
+  model: new OllamaModel('qwen3:0.6b'),
+  tools: [weatherTool],
+  instruction: 'You help users check the weather',
+});
+```
+
+## Implementation Details
+
+### Message Format Conversion
+
+OllamaModel automatically converts between ADK's `Content` format and Ollama's message format:
+
+- **Text messages**: Converted to Ollama's text format
+- **Function calls**: Converted to Ollama's `tool_calls` format
+- **Function responses**: Converted to Ollama's `tool` role messages
+
+### Schema Sanitization
+
+JSON schemas are automatically sanitized to ensure compatibility:
+- Type names are converted to lowercase (`String` → `string`)
+- Properties are recursively sanitized
+- Invalid schemas are cleaned up
+
+### Authentication
+
+For cloud-hosted Ollama, the `OLLAMA_API_KEY` environment variable is automatically used:
+
+```typescript
+this.ollama = new Ollama({
+  host: this.baseURL,
+  headers: {
+    Authorization: `Bearer ${process.env.OLLAMA_API_KEY}`,
+  }
+});
+```
+
+## Error Handling
+
+```typescript
+try {
+  const agent = new LlmAgent({
+    name: 'my-agent',
+    model: new OllamaModel('qwen3:0.6b'),
+  });
+  
+  // Use the agent
+} catch (error) {
+  console.error('Error:', error.message);
+}
+```
+
+Common errors:
+- Connection refused: Ollama is not running locally
+- Unauthorized: Invalid or missing `OLLAMA_API_KEY` for cloud models
+- Model not found: The specified model is not available
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Ollama Integration" icon="server" href="/concepts/ollama-integration">
+    Learn more about how OllamaModel works
+  </Card>
+  <Card title="Local Ollama Guide" icon="computer" href="/guides/local-ollama">
+    Set up local Ollama models
+  </Card>
+  <Card title="Cloud Ollama Guide" icon="cloud" href="/guides/cloud-ollama">
+    Use cloud-hosted Ollama
+  </Card>
+  <Card title="GenAIAgentService" icon="stream" href="/api/genai-agent-service">
+    Streaming service for agents
+  </Card>
+</CardGroup>

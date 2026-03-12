@@ -1,0 +1,495 @@
+---
+title: "Ollama Integration"
+description: "Deep dive into how OllamaModel extends BaseLlm to work with local and cloud Ollama instances"
+---
+
+## Overview
+
+The `OllamaModel` class is a custom implementation of ADK's `BaseLlm` that enables you to use Ollama models (both local and cloud-hosted) as the LLM provider for your ADK agents. This integration allows you to leverage smaller, faster local models during development, reducing API costs and latency.
+
+<Note>
+  Ollama local models are particularly convenient during development to save tokens and test agent behavior without external dependencies.
+</Note>
+
+## Architecture
+
+The `OllamaModel` class bridges two different APIs:
+
+```
+┌─────────────────┐         ┌──────────────┐         ┌─────────────┐
+│  ADK Agent      │────────>│ OllamaModel  │────────>│   Ollama    │
+│  (LlmAgent)     │         │ (BaseLlm)    │         │   Server    │
+└─────────────────┘         └──────────────┘         └─────────────┘
+     ADK Format              Format Conversion         Ollama Format
+     (Content[])                                       (Message[])
+```
+
+### Key Responsibilities
+
+1. **Extends BaseLlm**: Inherits from ADK's `BaseLlm` class to integrate seamlessly with the ADK ecosystem
+2. **Message Translation**: Converts ADK `Content` format to Ollama `Message` format
+3. **Tool Support**: Handles function calling with JSON schema conversion
+4. **Streaming**: Supports both streaming and non-streaming responses
+5. **Multi-Host**: Works with local and cloud Ollama instances
+
+## Class Structure
+
+Here's the core implementation from `ollama-model.ts:38-53`:
+
+```typescript
+export class OllamaModel extends BaseLlm {
+  private readonly baseURL: string;
+  private ollama: Ollama;
+  public model: string;
+
+  constructor(
+    modelName: string = 'qwen3:0.6b', 
+    baseURL: string = 'http://localhost:11434/v1'
+  ) {
+    super({ model: modelName });
+    this.baseURL = baseURL;
+    this.model = modelName;
+    this.ollama = new Ollama({
+      host: this.baseURL,
+      headers: {
+        Authorization: `Bearer ${process.env.OLLAMA_API_KEY}`,
+      }
+    });
+  }
+}
+```
+
+<Tabs>
+  <Tab title="Local Ollama">
+    When using a local Ollama instance, the `baseURL` defaults to `http://localhost:11434/v1` and no API key is required:
+
+    ```typescript
+    import { OllamaModel } from '@yagolopez/adk-utils';
+    import { LlmAgent } from '@google/adk';
+
+    // Local Ollama (no API key needed)
+    const agent = new LlmAgent({
+      name: 'LocalAgent',
+      model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1'),
+      description: 'Agent using local Ollama',
+      instruction: 'You are a helpful assistant',
+    });
+    ```
+
+    **Benefits:**
+    - Zero API costs
+    - Low latency
+    - Works offline
+    - Full control over model selection
+  </Tab>
+  
+  <Tab title="Cloud Ollama">
+    For cloud-hosted Ollama, set the `OLLAMA_API_KEY` environment variable and use `https://ollama.com` as the base URL:
+
+    ```typescript
+    import { OllamaModel } from '@yagolopez/adk-utils';
+    import { LlmAgent } from '@google/adk';
+
+    // Cloud Ollama (requires OLLAMA_API_KEY in .env)
+    const agent = new LlmAgent({
+      name: 'CloudAgent',
+      model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+      description: 'Agent using cloud Ollama',
+      instruction: 'You are a helpful assistant',
+    });
+    ```
+
+    **Benefits:**
+    - No local setup required
+    - Access to more powerful models
+    - Scales automatically
+  </Tab>
+</Tabs>
+
+## Message Format Conversion
+
+One of the most critical functions is `convertToOllamaMessages()`, which translates ADK's `Content[]` format to Ollama's `Message[]` format.
+
+### ADK Content Structure
+
+ADK uses this format:
+
+```typescript
+interface Content {
+  role: 'user' | 'model' | 'tool';
+  parts: Part[];
+}
+
+interface Part {
+  text?: string;                    // Regular text
+  functionCall?: FunctionCall;      // Tool invocation
+  functionResponse?: FunctionResponse; // Tool result
+}
+```
+
+### Conversion Logic
+
+From `ollama-model.ts:191-235`, the conversion handles three scenarios:
+
+<Accordion title="Text Messages">
+  ```typescript
+  // ADK format
+  {
+    role: 'user',
+    parts: [{ text: 'Hello' }]
+  }
+
+  // Converts to Ollama format
+  {
+    role: 'user',
+    content: 'Hello'
+  }
+  ```
+
+  Text from all parts is concatenated with newlines.
+</Accordion>
+
+<Accordion title="Function Calls">
+  ```typescript
+  // ADK format
+  {
+    role: 'model',
+    parts: [
+      { 
+        functionCall: { 
+          name: 'getWeather', 
+          args: { city: 'NYC' } 
+        } 
+      }
+    ]
+  }
+
+  // Converts to Ollama format
+  {
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      {
+        function: {
+          name: 'getWeather',
+          arguments: { city: 'NYC' }
+        }
+      }
+    ]
+  }
+  ```
+
+  From `ollama-model.ts:218-227`:
+  ```typescript
+  if (toolCallParts.length > 0) {
+    message.tool_calls = toolCallParts
+      .filter((p): p is { functionCall: FunctionCall } => 'functionCall' in p)
+      .map((p) => ({
+        function: {
+          name: p.functionCall.name,
+          arguments: p.functionCall.args
+        }
+      }));
+  }
+  ```
+</Accordion>
+
+<Accordion title="Function Responses">
+  ```typescript
+  // ADK format
+  {
+    role: 'tool',
+    parts: [
+      {
+        functionResponse: {
+          name: 'getWeather',
+          response: { temp: 72, conditions: 'sunny' }
+        }
+      }
+    ]
+  }
+
+  // Converts to Ollama format
+  {
+    role: 'tool',
+    content: '{"temp":72,"conditions":"sunny"}'
+  }
+  ```
+
+  From `ollama-model.ts:203-212`:
+  ```typescript
+  if (functionResponseParts.length > 0) {
+    functionResponseParts.forEach(p => {
+      const resp = p.functionResponse;
+      resultMessages.push({
+        role: 'tool',
+        content: JSON.stringify(resp?.response),
+      });
+    });
+  }
+  ```
+</Accordion>
+
+## Function Calling Support
+
+OllamaModel supports function calling by converting ADK tool declarations to Ollama's function schema format.
+
+### Tool Declaration Processing
+
+From `ollama-model.ts:66-93`, the class extracts and converts tool declarations:
+
+```typescript
+let tools: OllamaTool[] | undefined;
+if (llmRequest.config?.tools) {
+  const declarations = llmRequest.config.tools.flatMap((t: unknown) => {
+    // Handle both ADK Tool format and custom ToolConfig format
+    if (typeof t === 'object' && t !== null) {
+      if ('functionDeclarations' in t && Array.isArray(t.functionDeclarations)) {
+        return t.functionDeclarations as ToolDeclaration[];
+      }
+      if ('function_declarations' in t && Array.isArray(t.function_declarations)) {
+        return t.function_declarations as ToolDeclaration[];
+      }
+    }
+    return [];
+  });
+  
+  if (declarations.length > 0) {
+    tools = declarations
+      .filter((decl): decl is ToolDeclaration & { name: string } => !!decl.name)
+      .map((decl) => ({
+        type: 'function',
+        function: {
+          name: decl.name,
+          description: decl.description || '',
+          parameters: this.sanitizeSchema(decl.parameters),
+        },
+      }));
+  }
+}
+```
+
+### Schema Sanitization
+
+<Warning>
+  Ollama requires lowercase type names in JSON schemas. ADK sometimes uses capitalized types like `"String"` which must be converted to `"string"`.
+</Warning>
+
+From `ollama-model.ts:240-265`, the `sanitizeSchema()` method handles this:
+
+```typescript
+private sanitizeSchema(schema: JSONSchema | undefined): JSONSchema | undefined {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) {
+    return schema.map((item) => this.sanitizeSchema(item as JSONSchema)) as unknown as JSONSchema;
+  }
+
+  const newSchema = { ...schema };
+  
+  // Convert type to lowercase
+  if (newSchema.type) {
+    newSchema.type = newSchema.type.toLowerCase();
+  }
+
+  // Recursively sanitize nested properties
+  if (newSchema.properties && typeof newSchema.properties === 'object') {
+    const newProps: Record<string, JSONSchema> = {};
+    for (const [key, value] of Object.entries(newSchema.properties)) {
+      newProps[key] = this.sanitizeSchema(value) as JSONSchema;
+    }
+    newSchema.properties = newProps;
+  }
+
+  return newSchema;
+}
+```
+
+## Streaming Implementation
+
+The `generateContentAsync()` method supports both streaming and non-streaming modes.
+
+### Streaming Mode
+
+From `ollama-model.ts:96-142`, streaming responses are yielded chunk by chunk:
+
+```typescript
+if (stream) {
+  const streamRequest: ChatRequest & { stream: true } = {
+    model: this.model,
+    messages,
+    stream: true,
+  };
+
+  if (tools && tools.length > 0) {
+    streamRequest.tools = tools;
+  }
+
+  const response = await this.ollama.chat(streamRequest);
+
+  for await (const part of response) {
+    // Handle tool calls
+    if (part.message && part.message.tool_calls) {
+      const toolCallParts = part.message.tool_calls.map((tc) => ({
+        functionCall: {
+          name: tc.function.name,
+          args: tc.function.arguments,
+        },
+      } as Part));
+
+      yield {
+        content: {
+          role: 'model',
+          parts: toolCallParts,
+        },
+        partial: false,
+      } as LlmResponse;
+    }
+
+    // Handle text content
+    if (part.message && part.message.content) {
+      const content: Content = {
+        role: 'model',
+        parts: [{ text: part.message.content } as Part],
+      };
+
+      yield {
+        content,
+        partial: true,
+      } as LlmResponse;
+    }
+  }
+}
+```
+
+### Non-Streaming Mode
+
+From `ollama-model.ts:143-181`, non-streaming returns the complete response:
+
+```typescript
+const response = await this.ollama.chat(nonStreamRequest);
+
+let parts: Part[] = [];
+
+if (response.message.tool_calls) {
+  parts = parts.concat(response.message.tool_calls.map((tc) => ({
+    functionCall: {
+      name: tc.function.name,
+      args: tc.function.arguments,
+    },
+  } as Part)));
+}
+
+if (response.message.content) {
+  parts.push({ text: response.message.content } as Part);
+}
+
+const content: Content = {
+  role: 'model',
+  parts,
+};
+
+yield {
+  content,
+} as LlmResponse;
+```
+
+## Connection Support
+
+<Note>
+  Live connections are not supported by OllamaModel. The `connect()` method will throw an error if called.
+</Note>
+
+From `ollama-model.ts:55-57`:
+
+```typescript
+connect(): Promise<BaseLlmConnection> {
+  throw new Error('Live connections are not supported for OllamaModel');
+}
+```
+
+This is because Ollama uses a request-response model rather than persistent bidirectional connections.
+
+## Usage Example with Tools
+
+Here's a complete example showing how to use OllamaModel with function calling:
+
+```typescript
+import { OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent, BaseTool } from '@google/adk';
+
+// Define a custom tool
+class WeatherTool extends BaseTool {
+  name = 'getWeather';
+  description = 'Get weather for a city';
+  
+  async runAsync({ args }: { args: { city: string } }) {
+    return {
+      city: args.city,
+      temperature: 72,
+      conditions: 'sunny'
+    };
+  }
+  
+  _getDeclaration() {
+    return {
+      name: this.name,
+      description: this.description,
+      parameters: {
+        type: 'object',
+        properties: {
+          city: {
+            type: 'string',
+            description: 'The city name'
+          }
+        },
+        required: ['city']
+      }
+    };
+  }
+}
+
+// Create agent with Ollama model and tools
+const agent = new LlmAgent({
+  name: 'WeatherAgent',
+  model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+  description: 'An agent that can check weather',
+  instruction: 'You help users check the weather. Use the getWeather tool when needed.',
+  tools: [new WeatherTool()]
+});
+```
+
+## Best Practices
+
+<Accordion title="Model Selection">
+  - **Development**: Use small, fast models like `qwen3:0.6b` or `qwen2.5:0.5b`
+  - **Production**: Use larger models like `llama3:8b` or `mixtral:8x7b` for better quality
+  - **Function Calling**: Ensure the model supports tool calling (check Ollama docs)
+</Accordion>
+
+<Accordion title="Error Handling">
+  ```typescript
+  try {
+    const response = await agent.generateAsync({
+      contents: [{ role: 'user', parts: [{ text: 'Hello' }] }]
+    });
+  } catch (error) {
+    console.error('Ollama error:', error);
+    // Handle network errors, model not found, etc.
+  }
+  ```
+</Accordion>
+
+<Accordion title="Environment Configuration">
+  ```bash
+  # .env file for cloud Ollama
+  OLLAMA_API_KEY=your-api-key-here
+  ```
+
+  For local Ollama, no environment variables are needed.
+</Accordion>
+
+## Related Resources
+
+- [GenAI Agent Service](/concepts/streaming) - Learn how to use OllamaModel with streaming
+- [Testing with MockModel](/concepts/testing) - Test your agents without Ollama
+- [Ollama Documentation](https://ollama.com/docs) - Official Ollama docs

@@ -1,0 +1,495 @@
+---
+title: Next.js Integration
+description: Complete guide for integrating ADK Utils with Next.js using GenAIAgentService
+---
+
+<Note>
+The `GenAIAgentService` class simplifies the creation of streaming API routes in Next.js for ADK agents with native support for Server-Sent Events (SSE).
+</Note>
+
+This guide shows you how to build a complete Next.js application with streaming AI agents using ADK Utils.
+
+## Prerequisites
+
+- Node.js 18+ installed
+- Basic understanding of Next.js and React
+- Familiarity with Google ADK concepts
+- Either local Ollama running or cloud API key configured
+
+## Project Setup
+
+### Create a Next.js Project
+
+```bash
+npx create-next-app@latest my-adk-app
+cd my-adk-app
+```
+
+### Install Dependencies
+
+```bash
+npm install @yagolopez/adk-utils @google/adk @google/genai ai ollama
+```
+
+**Package purposes:**
+- `@yagolopez/adk-utils`: OllamaModel and GenAIAgentService
+- `@google/adk`: Google Agent Development Kit
+- `@google/genai`: GenAI type definitions
+- `ai`: Vercel AI SDK for frontend streaming
+- `ollama`: Ollama client library
+
+### Configure Environment Variables
+
+Create `.env.local`:
+
+```bash .env.local
+# For cloud Ollama (optional)
+OLLAMA_API_KEY=your_api_key_here
+
+# For local Ollama, no environment variables needed
+```
+
+## Backend: Create API Route
+
+<Steps>
+
+<Step title="Create API Route Directory">
+
+Create the API route structure:
+
+```bash
+mkdir -p app/api/chat
+```
+
+</Step>
+
+<Step title="Implement the Agent Service">
+
+Create `app/api/chat/route.ts`:
+
+```typescript app/api/chat/route.ts
+import { GenAIAgentService, OllamaModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+export async function POST(req: Request) {
+  try {
+    // Get user messages from the frontend
+    const { messages } = await req.json();
+    
+    // Create instance of ADK agent
+    const agent = new LlmAgent({
+      name: 'my-agent',
+      model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+      description: 'A helpful AI assistant',
+      instruction: `You are a helpful assistant that provides clear, concise answers. 
+      Always be polite and professional.`,
+      tools: [], // Add your tools here if needed
+    });
+    
+    // Create agent service to invoke the agent in the endpoint
+    const service = new GenAIAgentService(agent);
+
+    // Check if the messages sent by the user are valid
+    if (!service.validateMessages(messages)) {
+      return GenAIAgentService.createErrorResponse('Invalid messages', 400);
+    }
+
+    // Invoke the agent with messages from the user and return streaming response
+    return service.createStreamingResponse(messages);
+  } catch (error) {
+    console.error('Error in chat API:', error);
+    return GenAIAgentService.createErrorResponse(
+      'Internal server error',
+      500,
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+  }
+}
+```
+
+<Note>
+**For local development**, change the OllamaModel URL:
+```typescript
+model: new OllamaModel('qwen3:0.6b', 'http://localhost:11434/v1')
+```
+</Note>
+
+</Step>
+
+<Step title="Understanding the Service Flow">
+
+The `GenAIAgentService` handles the complete streaming workflow:
+
+```typescript
+// 1. Validate messages
+service.validateMessages(messages) // Returns boolean
+
+// 2. Transform Vercel AI SDK format to ADK format
+// Happens automatically inside createStreamingResponse()
+
+// 3. Stream the response with proper SSE formatting
+return service.createStreamingResponse(messages);
+```
+
+The service automatically:
+- Converts message formats (UIMessage → Content)
+- Formats tools for GenAI compatibility
+- Handles streaming with Server-Sent Events
+- Manages tool calling loops (up to 5 turns)
+- Processes text deltas correctly
+
+</Step>
+
+</Steps>
+
+## Frontend: Chat Interface
+
+<Steps>
+
+<Step title="Create Chat Component">
+
+Create `app/components/Chat.tsx`:
+
+```tsx app/components/Chat.tsx
+'use client';
+
+import { useChat } from 'ai/react';
+
+export default function Chat() {
+  const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
+    api: '/api/chat',
+  });
+
+  return (
+    <div className="flex flex-col h-screen max-w-2xl mx-auto p-4">
+      {/* Messages Container */}
+      <div className="flex-1 overflow-y-auto mb-4 space-y-4">
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`p-4 rounded-lg ${
+              message.role === 'user'
+                ? 'bg-blue-100 ml-auto max-w-[80%]'
+                : 'bg-gray-100 mr-auto max-w-[80%]'
+            }`}
+          >
+            <p className="font-semibold mb-1">
+              {message.role === 'user' ? 'You' : 'AI'}
+            </p>
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+        ))}
+        
+        {isLoading && (
+          <div className="bg-gray-100 p-4 rounded-lg mr-auto max-w-[80%]">
+            <p className="text-gray-500">AI is thinking...</p>
+          </div>
+        )}
+        
+        {error && (
+          <div className="bg-red-100 p-4 rounded-lg text-red-700">
+            <p className="font-semibold">Error:</p>
+            <p>{error.message}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Input Form */}
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Ask the agent..."
+          disabled={isLoading}
+          className="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button
+          type="submit"
+          disabled={isLoading || !input.trim()}
+          className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
+          {isLoading ? 'Sending...' : 'Send'}
+        </button>
+      </form>
+    </div>
+  );
+}
+```
+
+</Step>
+
+<Step title="Update Main Page">
+
+Update `app/page.tsx`:
+
+```tsx app/page.tsx
+import Chat from './components/Chat';
+
+export default function Home() {
+  return (
+    <main className="min-h-screen bg-white">
+      <div className="border-b p-4">
+        <h1 className="text-2xl font-bold text-center">AI Chat Assistant</h1>
+        <p className="text-center text-gray-600 mt-1">
+          Powered by ADK Utils and Ollama
+        </p>
+      </div>
+      <Chat />
+    </main>
+  );
+}
+```
+
+</Step>
+
+<Step title="Run the Application">
+
+**For local Ollama:**
+
+```bash
+# Terminal 1: Start Ollama
+ollama serve
+
+# Terminal 2: Start Next.js
+npm run dev
+```
+
+**For cloud Ollama:**
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+</Step>
+
+</Steps>
+
+## Advanced Features
+
+### Adding Custom Tools
+
+<Accordion title="Example: Weather Tool">
+
+Create a custom tool for your agent:
+
+```typescript app/api/chat/route.ts
+import { Tool } from '@google/adk';
+
+// Define a weather tool
+class WeatherTool extends Tool {
+  name = 'get_weather';
+  description = 'Get the current weather for a location';
+
+  _getDeclaration() {
+    return {
+      name: this.name,
+      description: this.description,
+      parameters: {
+        type: 'object',
+        properties: {
+          location: {
+            type: 'string',
+            description: 'The city name'
+          }
+        },
+        required: ['location']
+      }
+    };
+  }
+
+  async runAsync({ args }) {
+    const { location } = args;
+    // In production, call a real weather API
+    return {
+      location,
+      temperature: 72,
+      condition: 'Sunny'
+    };
+  }
+}
+
+// Add to agent
+const agent = new LlmAgent({
+  name: 'weather-agent',
+  model: new OllamaModel('qwen2.5:0.5b', 'https://ollama.com'),
+  description: 'Weather assistant',
+  instruction: `You are a weather assistant. Use the get_weather tool to provide weather information.`,
+  tools: [new WeatherTool()], // Add the tool here
+});
+```
+
+</Accordion>
+
+### Handling Streaming Responses
+
+The `GenAIAgentService` automatically handles streaming with proper SSE formatting:
+
+```typescript
+// From genai-agent-service.ts:304-326
+const stream = new ReadableStream<Uint8Array>({
+  start: async (controller) => {
+    try {
+      this.sendStartEvents(controller);
+      await this.runConversationLoop(adkContents, formattedTools, controller);
+      this.sendEndEvents(controller);
+      controller.close();
+    } catch (error) {
+      console.error('Error streaming response:', error);
+      
+      // Send error as text so it is visible in the chat UI
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.sendSSEChunks(controller, {
+        type: 'text-delta',
+        id: 'text-1',
+        delta: `❌ System Error: ${errorMessage}`
+      });
+      
+      this.sendEndEvents(controller);
+      controller.close();
+    }
+  }
+});
+```
+
+### Environment-Based Configuration
+
+<CodeGroup>
+
+```typescript Local Development
+// app/api/chat/route.ts
+const model = new OllamaModel(
+  'qwen3:0.6b',
+  'http://localhost:11434/v1'
+);
+```
+
+```typescript Production
+// app/api/chat/route.ts
+const model = new OllamaModel(
+  'qwen2.5:0.5b',
+  'https://ollama.com'
+);
+```
+
+```typescript Dynamic
+// app/api/chat/route.ts
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+const model = new OllamaModel(
+  isDevelopment ? 'qwen3:0.6b' : 'qwen2.5:0.5b',
+  isDevelopment ? 'http://localhost:11434/v1' : 'https://ollama.com'
+);
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+### Messages Not Streaming
+
+**Issue**: Messages appear all at once instead of streaming.
+
+**Solution**: Ensure you're using the `useChat` hook from Vercel AI SDK:
+
+```tsx
+import { useChat } from 'ai/react'; // Correct
+
+const { messages, input, handleInputChange, handleSubmit } = useChat({
+  api: '/api/chat',
+});
+```
+
+### CORS Errors
+
+**Issue**: CORS errors in browser console.
+
+**Solution**: API routes in Next.js automatically handle CORS. Make sure your route is in `app/api/` directory.
+
+### Route Not Found
+
+**Issue**: 404 error when calling API.
+
+**Solution**: Verify your route file structure:
+
+```
+app/
+└── api/
+    └── chat/
+        └── route.ts  ← Must be named exactly "route.ts"
+```
+
+### Environment Variables Not Loading
+
+**Issue**: `OLLAMA_API_KEY` is undefined.
+
+**Solution**:
+1. Use `.env.local` (not `.env`)
+2. Restart dev server after adding variables
+3. Ensure no spaces around `=` in env file
+
+### Streaming Stops Abruptly
+
+**Issue**: Responses cut off mid-stream.
+
+**Solution**: Check your agent's conversation loop limit:
+
+```typescript
+// In genai-agent-service.ts:34
+private readonly MAX_TURNS = 5; // Increase if needed
+```
+
+## Production Deployment
+
+### Deploying to Vercel
+
+<Steps>
+
+<Step title="Prepare for Deployment">
+
+1. Commit your code to Git
+2. Push to GitHub/GitLab/Bitbucket
+
+</Step>
+
+<Step title="Deploy to Vercel">
+
+```bash
+npm install -g vercel
+vercel
+```
+
+Or connect your repository via [Vercel Dashboard](https://vercel.com/dashboard).
+
+</Step>
+
+<Step title="Configure Environment Variables">
+
+In Vercel Dashboard:
+1. Go to Project Settings → Environment Variables
+2. Add `OLLAMA_API_KEY` (if using cloud Ollama)
+3. Redeploy
+
+</Step>
+
+</Steps>
+
+<Warning>
+**Important for production:**
+- Always use cloud Ollama (not localhost)
+- Set rate limiting on your API routes
+- Implement proper error handling
+- Monitor API usage and costs
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Playwright Testing" icon="flask" href="/guides/playwright-testing">
+    Learn how to test your app with MockModel
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/ollama-model">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

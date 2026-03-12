@@ -1,0 +1,826 @@
+---
+title: "Testing with MockModel"
+description: "Learn how to use MockModel for deterministic testing without API costs or external dependencies"
+---
+
+## Overview
+
+The `MockModel` class is a mock implementation of ADK's `BaseLlm` designed specifically for testing and development. It allows you to simulate LLM responses with custom chunks and delays, enabling you to write comprehensive tests without making real API calls.
+
+<Note>
+  MockModel is perfect for unit tests, integration tests, and E2E tests with Playwright. It provides deterministic responses, requires no API keys, and has zero costs.
+</Note>
+
+## Benefits
+
+<Accordion title="Zero API Costs">
+  No calls to external LLM providers means:
+  - No billing surprises during CI/CD runs
+  - Unlimited test executions
+  - Free development and testing
+</Accordion>
+
+<Accordion title="No External Dependencies">
+  Tests run without:
+  - Internet connection
+  - Running Ollama server
+  - API key configuration
+  - Rate limiting concerns
+</Accordion>
+
+<Accordion title="Deterministic Responses">
+  You control exactly what the model returns:
+  - Predictable test outcomes
+  - Easy to reproduce bugs
+  - Reliable CI/CD pipelines
+  - Test specific edge cases
+</Accordion>
+
+<Accordion title="Fast Execution">
+  Mock responses are instantaneous:
+  - Tests run in milliseconds
+  - Faster feedback loops
+  - Quick iteration during development
+</Accordion>
+
+<Accordion title="Controllable Streaming">
+  Simulate streaming behavior:
+  - Test chunk-by-chunk rendering
+  - Validate loading states
+  - Test error recovery
+  - Configure custom delays
+</Accordion>
+
+## Class Structure
+
+From `mock-model.ts:8-40`, the MockModel extends BaseLlm:
+
+```typescript
+export class MockModel extends BaseLlm {
+  private responseChunks: string[];
+  private responseDelay: number;
+
+  constructor(
+    modelName: string = 'mock-model',
+    delay: number = 0,
+    chunks: string[] = ["Hello", " world", "!"]
+  ) {
+    super({ model: modelName });
+    this.responseChunks = chunks;
+    this.responseDelay = delay;
+  }
+
+  /**
+   * Sets the response chunks to be returned by the mock.
+   * @param chunks Array of string chunks to simulate streaming
+   */
+  setMockResponse(chunks: string[]): void {
+    this.responseChunks = chunks;
+  }
+
+  /**
+   * Sets the simulated delay between chunks.
+   * @param delayMs Delay in milliseconds
+   */
+  setResponseDelay(delayMs: number): void {
+    this.responseDelay = delayMs;
+  }
+}
+```
+
+### Constructor Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `modelName` | `string` | `'mock-model'` | Name identifier for the mock model |
+| `delay` | `number` | `0` | Delay in milliseconds between chunks |
+| `chunks` | `string[]` | `["Hello", " world", "!"]` | Array of text chunks to return |
+
+## Basic Usage
+
+### Simple Mock Response
+
+```typescript
+import { MockModel } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+
+// Create a mock model with instant responses
+const mockModel = new MockModel(
+  'test-model',
+  0, // No delay
+  ['Hello', ' this is', ' a mock response']
+);
+
+const agent = new LlmAgent({
+  name: 'MockAgent',
+  model: mockModel,
+  description: 'Testing Agent',
+  instruction: 'You are a test agent',
+});
+
+// Use the agent normally - it will return the mocked response
+const response = await agent.generateAsync({
+  contents: [{ role: 'user', parts: [{ text: 'Hello' }] }]
+});
+
+// Response will be: "Hello this is a mock response"
+```
+
+### Dynamic Response Configuration
+
+```typescript
+const mockModel = new MockModel();
+
+// Change response for different test scenarios
+mockModel.setMockResponse(['First', ' test', ' response']);
+// Test scenario 1...
+
+mockModel.setMockResponse(['Second', ' test', ' response']);
+// Test scenario 2...
+
+mockModel.setMockResponse(['Error', ' handling', ' test']);
+// Test error handling...
+```
+
+### Simulating Network Latency
+
+```typescript
+// Simulate 50ms delay between chunks
+const mockModel = new MockModel(
+  'slow-model',
+  50,
+  ['Loading', '...', 'done']
+);
+
+// Or adjust delay dynamically
+mockModel.setResponseDelay(100); // 100ms delay
+```
+
+## Implementation Details
+
+### Generate Content Method
+
+From `mock-model.ts:42-77`, the core generation logic:
+
+```typescript
+async *generateContentAsync(
+  llmRequest: LlmRequest,
+  stream: boolean = true
+): AsyncGenerator<LlmResponse, void> {
+  
+  // Simulate processing time if needed
+  if (this.responseDelay > 0) {
+    await new Promise(resolve => setTimeout(resolve, this.responseDelay));
+  }
+
+  if (stream) {
+    // Streaming mode: yield chunks one by one
+    for (const chunkText of this.responseChunks) {
+      if (this.responseDelay > 0) {
+        await new Promise(resolve => setTimeout(resolve, this.responseDelay));
+      }
+
+      yield {
+        content: {
+          role: 'model',
+          parts: [{ text: chunkText } as Part],
+        },
+        partial: true,
+      } as LlmResponse;
+    }
+  } else {
+    // Non-streaming: join all chunks and return as one response
+    const fullText = this.responseChunks.join('');
+    yield {
+      content: {
+        role: 'model',
+        parts: [{ text: fullText } as Part],
+      },
+      partial: false,
+    } as LlmResponse;
+  }
+}
+```
+
+### Streaming vs Non-Streaming
+
+<Tabs>
+  <Tab title="Streaming Mode">
+    When `stream: true`, chunks are yielded individually:
+
+    ```typescript
+    const mockModel = new MockModel('test', 0, ['Hello', ' world']);
+
+    const response = mockModel.generateContentAsync(request, true);
+
+    for await (const chunk of response) {
+      console.log(chunk.content.parts[0].text);
+      // First iteration: "Hello"
+      // Second iteration: " world"
+    }
+    ```
+
+    Each chunk has `partial: true` to indicate streaming.
+  </Tab>
+
+  <Tab title="Non-Streaming Mode">
+    When `stream: false`, all chunks are concatenated:
+
+    ```typescript
+    const mockModel = new MockModel('test', 0, ['Hello', ' world']);
+
+    const response = mockModel.generateContentAsync(request, false);
+
+    for await (const chunk of response) {
+      console.log(chunk.content.parts[0].text);
+      // Single iteration: "Hello world"
+    }
+    ```
+
+    Single response with `partial: false`.
+  </Tab>
+</Tabs>
+
+## Unit Testing
+
+### Testing Agent Logic
+
+```typescript
+import { MockModel, GenAIAgentService } from '@yagolopez/adk-utils';
+import { LlmAgent } from '@google/adk';
+import { describe, it, expect } from '@jest/globals';
+
+describe('Agent Tests', () => {
+  it('should process user message and return response', async () => {
+    // Arrange
+    const mockModel = new MockModel(
+      'test-model',
+      0,
+      ['This is', ' a test', ' response']
+    );
+
+    const agent = new LlmAgent({
+      name: 'TestAgent',
+      model: mockModel,
+      description: 'Test agent',
+      instruction: 'You are helpful',
+    });
+
+    const messages = [
+      {
+        role: 'user' as const,
+        parts: [{ type: 'text' as const, text: 'Hello' }]
+      }
+    ];
+
+    // Act
+    const service = new GenAIAgentService(agent);
+    const response = service.createStreamingResponse(messages);
+
+    // Assert
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+    // Read stream and verify content
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let fullResponse = '';
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fullResponse += decoder.decode(value);
+      }
+    }
+
+    expect(fullResponse).toContain('This is a test response');
+  });
+});
+```
+
+### Testing Streaming Behavior
+
+```typescript
+it('should stream response in chunks', async () => {
+  const mockModel = new MockModel(
+    'test-model',
+    10, // 10ms delay between chunks
+    ['Chunk 1', ' Chunk 2', ' Chunk 3']
+  );
+
+  const agent = new LlmAgent({
+    name: 'StreamingAgent',
+    model: mockModel,
+    description: 'Test streaming',
+    instruction: 'Stream responses',
+  });
+
+  const startTime = Date.now();
+  
+  const response = mockModel.generateContentAsync({
+    contents: [{ role: 'user', parts: [{ text: 'Test' }] }]
+  } as any, true);
+
+  const chunks: string[] = [];
+  for await (const chunk of response) {
+    chunks.push(chunk.content.parts[0].text || '');
+  }
+
+  const elapsed = Date.now() - startTime;
+
+  // Verify chunks received individually
+  expect(chunks).toEqual(['Chunk 1', ' Chunk 2', ' Chunk 3']);
+  
+  // Verify delay was applied (3 chunks × 10ms ≈ 30ms)
+  expect(elapsed).toBeGreaterThanOrEqual(30);
+});
+```
+
+### Testing Error Scenarios
+
+```typescript
+it('should handle empty responses', async () => {
+  const mockModel = new MockModel('test', 0, []);
+  
+  const agent = new LlmAgent({
+    name: 'EmptyAgent',
+    model: mockModel,
+    description: 'Test empty',
+    instruction: 'Return nothing',
+  });
+
+  const response = mockModel.generateContentAsync({
+    contents: [{ role: 'user', parts: [{ text: 'Test' }] }]
+  } as any, true);
+
+  const chunks: string[] = [];
+  for await (const chunk of response) {
+    chunks.push(chunk.content.parts[0].text || '');
+  }
+
+  expect(chunks).toEqual([]);
+});
+
+it('should handle single-word responses', async () => {
+  const mockModel = new MockModel('test', 0, ['OK']);
+  
+  const response = mockModel.generateContentAsync({
+    contents: []
+  } as any, false);
+
+  const result = [];
+  for await (const chunk of response) {
+    result.push(chunk);
+  }
+
+  expect(result).toHaveLength(1);
+  expect(result[0].content.parts[0].text).toBe('OK');
+  expect(result[0].partial).toBe(false);
+});
+```
+
+## E2E Testing with Playwright
+
+MockModel is particularly powerful for end-to-end testing because it allows you to test your entire application stack (frontend + API) without external dependencies.
+
+### Complete Example from README
+
+From `README.md:166-216`, here's a full Playwright test:
+
+```typescript
+// example.spec.ts
+
+import { test, expect } from "@playwright/test";
+import { MockModel, GenAIAgentService } from "@yagolopez/adk-utils";
+import { LlmAgent } from "@google/adk";
+
+test.describe("Chat Functionality", () => {
+  test("user can send a message and receive a response", async ({ page }) => {
+    // Intercept the API route
+    await page.route("/api/genai-agent", async (route) => {
+      const { messages } = route.request().postDataJSON();
+
+      // Create agent with mock model
+      const agent = new LlmAgent({
+        name: "test_agent",
+        description: "test-description",
+        model: new MockModel("mock-model", 0, ["Response from mock model"]),
+        instruction: "You are a test agent.",
+      });
+
+      const service = new GenAIAgentService(agent);
+      const response = service.createStreamingResponse(messages);
+      const bodyBuffer = await response.arrayBuffer();
+
+      await route.fulfill({
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        contentType:
+          response.headers.get("content-type") || "text/event-stream",
+        body: Buffer.from(bodyBuffer),
+      });
+    });
+
+    await page.goto("/");
+
+    const input = page.getByPlaceholder("Ask the agent...");
+    await input.fill("hola");
+
+    const sendButton = page.getByRole("button", { name: "Send message" });
+    await sendButton.click();
+
+    await expect(page.getByText("Response from mock model")).toBeVisible();
+  });
+});
+```
+
+### Testing Different Scenarios
+
+<Tabs>
+  <Tab title="Success Case">
+    ```typescript
+    test("should display successful response", async ({ page }) => {
+      await page.route("/api/genai-agent", async (route) => {
+        const { messages } = route.request().postDataJSON();
+
+        const agent = new LlmAgent({
+          name: "success_agent",
+          model: new MockModel(
+            "mock", 
+            0, 
+            ["Success!", " Your request was processed."]
+          ),
+          instruction: "Be helpful",
+        });
+
+        const service = new GenAIAgentService(agent);
+        const response = service.createStreamingResponse(messages);
+        const buffer = await response.arrayBuffer();
+
+        await route.fulfill({
+          status: 200,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: Buffer.from(buffer),
+        });
+      });
+
+      await page.goto("/");
+      await page.fill("input", "Test message");
+      await page.click("button[type=submit]");
+
+      await expect(page.getByText("Success! Your request was processed.")).toBeVisible();
+    });
+    ```
+  </Tab>
+
+  <Tab title="Streaming Display">
+    ```typescript
+    test("should show loading state during streaming", async ({ page }) => {
+      await page.route("/api/genai-agent", async (route) => {
+        const agent = new LlmAgent({
+          name: "slow_agent",
+          model: new MockModel(
+            "mock", 
+            100, // 100ms delay
+            ["Loading", ".", ".", "."]
+          ),
+          instruction: "Stream slowly",
+        });
+
+        const service = new GenAIAgentService(agent);
+        const response = service.createStreamingResponse(
+          route.request().postDataJSON().messages
+        );
+        const buffer = await response.arrayBuffer();
+
+        await route.fulfill({
+          status: 200,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: Buffer.from(buffer),
+        });
+      });
+
+      await page.goto("/");
+      await page.fill("input", "Test");
+      await page.click("button[type=submit]");
+
+      // Verify loading indicator appears
+      await expect(page.locator(".loading-indicator")).toBeVisible();
+
+      // Wait for complete response
+      await expect(page.getByText("Loading...")).toBeVisible();
+      
+      // Verify loading indicator disappears
+      await expect(page.locator(".loading-indicator")).not.toBeVisible();
+    });
+    ```
+  </Tab>
+
+  <Tab title="Error Handling">
+    ```typescript
+    test("should handle validation errors", async ({ page }) => {
+      await page.route("/api/genai-agent", async (route) => {
+        // Simulate validation error
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: "Invalid messages",
+            details: "Messages array must not be empty"
+          }),
+        });
+      });
+
+      await page.goto("/");
+      await page.click("button[type=submit]"); // Submit without message
+
+      await expect(page.getByText("Invalid messages")).toBeVisible();
+    });
+    ```
+  </Tab>
+
+  <Tab title="Multiple Exchanges">
+    ```typescript
+    test("should handle multiple message exchanges", async ({ page }) => {
+      let callCount = 0;
+      const responses = [
+        ["First", " response"],
+        ["Second", " response"],
+        ["Third", " response"],
+      ];
+
+      await page.route("/api/genai-agent", async (route) => {
+        const agent = new LlmAgent({
+          name: "multi_agent",
+          model: new MockModel("mock", 0, responses[callCount]),
+          instruction: "Respond sequentially",
+        });
+
+        callCount++;
+
+        const service = new GenAIAgentService(agent);
+        const response = service.createStreamingResponse(
+          route.request().postDataJSON().messages
+        );
+        const buffer = await response.arrayBuffer();
+
+        await route.fulfill({
+          status: 200,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: Buffer.from(buffer),
+        });
+      });
+
+      await page.goto("/");
+
+      // First message
+      await page.fill("input", "Message 1");
+      await page.click("button[type=submit]");
+      await expect(page.getByText("First response")).toBeVisible();
+
+      // Second message
+      await page.fill("input", "Message 2");
+      await page.click("button[type=submit]");
+      await expect(page.getByText("Second response")).toBeVisible();
+
+      // Third message
+      await page.fill("input", "Message 3");
+      await page.click("button[type=submit]");
+      await expect(page.getByText("Third response")).toBeVisible();
+
+      expect(callCount).toBe(3);
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Testing with Tools
+
+<Warning>
+  MockModel does not simulate function calling. It only returns text responses. If you need to test tool execution, you'll need to mock the tools themselves or use a more sophisticated test setup.
+</Warning>
+
+### Approach 1: Test Tool Logic Separately
+
+```typescript
+import { BaseTool } from '@google/adk';
+
+class WeatherTool extends BaseTool {
+  name = 'getWeather';
+  
+  async runAsync({ args }: { args: { city: string } }) {
+    return { temperature: 72, conditions: 'sunny' };
+  }
+}
+
+// Unit test the tool
+it('should return weather data', async () => {
+  const tool = new WeatherTool();
+  const result = await tool.runAsync({ args: { city: 'NYC' } });
+  
+  expect(result).toEqual({ temperature: 72, conditions: 'sunny' });
+});
+
+// Use MockModel to simulate the response that mentions the weather
+it('should display weather in UI', async ({ page }) => {
+  const mockModel = new MockModel(
+    'mock',
+    0,
+    ['The weather in NYC is 72° and sunny']
+  );
+  
+  // ... rest of E2E test
+});
+```
+
+### Approach 2: Mock the Service Layer
+
+```typescript
+it('should handle tool calls in agent service', async () => {
+  // Mock the entire service response
+  const mockResponse = {
+    role: 'model',
+    parts: [
+      {
+        functionCall: {
+          name: 'getWeather',
+          args: { city: 'NYC' }
+        }
+      }
+    ]
+  };
+  
+  // Test your service logic with the mock response
+  // ...
+});
+```
+
+## Best Practices
+
+<Accordion title="Use Realistic Response Chunks">
+  Structure chunks like real LLM responses:
+
+  ```typescript
+  // Good - natural word boundaries
+  new MockModel('mock', 0, [
+    'The weather',
+    ' in NYC',
+    ' is 72°',
+    ' and sunny.'
+  ])
+
+  // Avoid - unrealistic chunking
+  new MockModel('mock', 0, [
+    'T',
+    'h',
+    'e',
+    ' ',
+    'w',
+    'e',
+    'a',
+    't',
+    'h',
+    'e',
+    'r'
+  ])
+  ```
+</Accordion>
+
+<Accordion title="Test Both Streaming Modes">
+  ```typescript
+  describe('Model Response', () => {
+    const chunks = ['Hello', ' world'];
+
+    it('should work in streaming mode', async () => {
+      const model = new MockModel('test', 0, chunks);
+      const response = model.generateContentAsync({} as any, true);
+      // ... test streaming
+    });
+
+    it('should work in non-streaming mode', async () => {
+      const model = new MockModel('test', 0, chunks);
+      const response = model.generateContentAsync({} as any, false);
+      // ... test non-streaming
+    });
+  });
+  ```
+</Accordion>
+
+<Accordion title="Simulate Different Latencies">
+  ```typescript
+  // Fast response (instant)
+  const fastModel = new MockModel('fast', 0, ['Quick answer']);
+
+  // Normal response (50-100ms)
+  const normalModel = new MockModel('normal', 50, ['Normal', ' speed']);
+
+  // Slow response (500ms+)
+  const slowModel = new MockModel('slow', 500, ['Slow', '...', 'answer']);
+
+  // Test timeout handling
+  const verySlowModel = new MockModel('very-slow', 5000, ['Too', ' slow']);
+  ```
+</Accordion>
+
+<Accordion title="Create Test Fixtures">
+  ```typescript
+  // test-fixtures.ts
+  export const testModels = {
+    quickResponse: new MockModel('quick', 0, ['Yes']),
+    detailedResponse: new MockModel('detailed', 0, [
+      'Based on your question,',
+      ' I can provide',
+      ' the following answer...'
+    ]),
+    errorResponse: new MockModel('error', 0, [
+      'I apologize,',
+      ' but I encountered an error.'
+    ]),
+  };
+
+  // In tests
+  import { testModels } from './test-fixtures';
+  
+  const agent = new LlmAgent({
+    model: testModels.quickResponse,
+    // ...
+  });
+  ```
+</Accordion>
+
+<Accordion title="Clean Up After Tests">
+  ```typescript
+  describe('Agent Tests', () => {
+    let mockModel: MockModel;
+    let agent: LlmAgent;
+
+    beforeEach(() => {
+      mockModel = new MockModel('test', 0, ['Default response']);
+      agent = new LlmAgent({
+        name: 'TestAgent',
+        model: mockModel,
+        instruction: 'Test instruction',
+      });
+    });
+
+    afterEach(() => {
+      // Reset mock for next test
+      mockModel.setMockResponse(['Default response']);
+      mockModel.setResponseDelay(0);
+    });
+
+    it('test 1', async () => {
+      mockModel.setMockResponse(['Custom response 1']);
+      // ... test
+    });
+
+    it('test 2', async () => {
+      mockModel.setMockResponse(['Custom response 2']);
+      // ... test
+    });
+  });
+  ```
+</Accordion>
+
+## Limitations
+
+<Warning>
+  MockModel has the following limitations:
+</Warning>
+
+1. **No Function Calling**: Does not simulate tool calls or function responses
+2. **Text Only**: Only returns text content, no multimodal support
+3. **No Context Awareness**: Does not consider input messages in responses
+4. **Fixed Responses**: Returns predetermined chunks, not dynamic content
+5. **No Connection Support**: Like OllamaModel, does not support live connections
+
+### When to Use Real Models
+
+You should use real models (or more sophisticated mocking) for:
+
+- Testing function calling workflows
+- Validating prompt engineering
+- Testing complex multi-turn conversations with context
+- Integration testing with actual LLM behavior
+- Load testing with realistic response times
+
+## Comparison: MockModel vs OllamaModel
+
+| Feature | MockModel | OllamaModel |
+|---------|-----------|-------------|
+| **Cost** | Free | Free (local) or paid (cloud) |
+| **Speed** | Instant | Depends on model/hardware |
+| **Setup** | None | Requires Ollama installation |
+| **Deterministic** | Yes | No |
+| **Function Calling** | No | Yes |
+| **Context Awareness** | No | Yes |
+| **Best For** | Unit/E2E tests | Development & production |
+| **Use Case** | Testing | Actual agent interactions |
+
+## Related Resources
+
+- [Ollama Integration](/concepts/ollama-integration) - Using real models
+- [Streaming & SSE](/concepts/streaming) - Understanding the streaming service
+- [Playwright Testing](https://playwright.dev/docs/intro) - E2E testing framework
+- [Jest Documentation](https://jestjs.io/docs/getting-started) - Unit testing framework
